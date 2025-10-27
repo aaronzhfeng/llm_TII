@@ -1,0 +1,58 @@
+{
+  "_comment": "MFU configuration for LLaMA 7B on A100 hardware",
+  "model_name": "llama_7b",
+  "hardware": "A100",
+  "gpus": 8,
+  "precision": "FP16",
+
+  "model_config": {
+    "hidden_size": 4096,
+    "intermediate_size": 11008,
+    "num_hidden_layers": 32,
+    "num_attention_heads": 32,
+    "num_key_value_heads": 32,
+    "vocab_size": 32000,
+    "tie_word_embeddings": false,
+    "max_position_embeddings": 2048
+  },
+
+  "hardware_specs": {
+    "peak_tflops_fp16": 312,
+    "peak_tflops_fp32": 156,
+    "peak_tflops_int8": 624,
+    "memory_gb": 40,
+    "memory_bandwidth_gb_s": 1555,
+    "interconnect_bandwidth_gb_s": 600
+  },
+
+  "training_config": {
+    "batch_size": 32,
+    "sequence_length": 2048,
+    "gradient_accumulation_steps": 1,
+    "mixed_precision": true,
+    "optimizer": "AdamW",
+    "learning_rate": 3e-4
+  },
+
+  "performance_measurements": {
+    "_comment": "These should be measured during actual training",
+    "tokens_per_second_achieved": 0,
+    "throughput_tokens_per_sec_per_gpu": 0,
+    "wall_clock_time_per_iteration_ms": 0,
+    "peak_memory_used_gb": 0,
+    "communication_overhead_percent": 0
+  },
+
+  "mfu_targets": {
+    "target_mfu_percent": 45,
+    "realistic_mfu_percent": 35,
+    "minimum_acceptable_mfu_percent": 25
+  },
+
+  "references": {
+    "paper": "Efficient Large-Scale Language Model Training on GPU Clusters",
+    "authors": "Narayanan et al.",
+    "year": 2021,
+    "url": "https://arxiv.org/abs/2104.04473"
+  }
+}

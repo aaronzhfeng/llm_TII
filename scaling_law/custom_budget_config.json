@@ -1,0 +1,17 @@
+{
+  "_comment": "Custom compute budget configurations for scaling law analysis",
+  "compute_budgets": [
+    {"name": "small", "budget_flops": 1e21, "description": "Small research project"},
+    {"name": "medium", "budget_flops": 1e22, "description": "Medium-scale experiment"},
+    {"name": "large", "budget_flops": 1e23, "description": "Large-scale training"},
+    {"name": "gpt3", "budget_flops": 3.14e23, "description": "GPT-3 175B scale"},
+    {"name": "llama_65b", "budget_flops": 1.0e23, "description": "LLaMA 65B scale"}
+  ],
+  "hardware_scenarios": {
+    "single_a100": {"flops_per_sec": 312e12, "cost_per_hour": 2.0},
+    "8x_a100": {"flops_per_sec": 2496e12, "cost_per_hour": 16.0},
+    "64x_a100": {"flops_per_sec": 19968e12, "cost_per_hour": 128.0},
+    "8x_h100": {"flops_per_sec": 7912e12, "cost_per_hour": 24.0}
+  }
+}
+

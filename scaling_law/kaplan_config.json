@@ -1,0 +1,24 @@
+{
+  "_comment": "Kaplan scaling law parameters from Kaplan et al., 2020",
+  "scaling_law": "kaplan",
+  "parameters": {
+    "N_c": 8.8e13,
+    "D_c": 5.4e13,
+    "alpha_N": 0.076,
+    "alpha_D": 0.095,
+    "optimal_exponent": 0.73
+  },
+  "compute_budget_examples": {
+    "gpt2_small": 1.5e18,
+    "gpt2_medium": 3.0e18,
+    "gpt2_large": 1.2e19,
+    "gpt3_175b": 3.14e23
+  },
+  "references": {
+    "paper": "Scaling Laws for Neural Language Models",
+    "authors": "Kaplan et al., OpenAI",
+    "year": 2020,
+    "url": "https://arxiv.org/abs/2001.08361"
+  }
+}
+

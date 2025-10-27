@@ -1,0 +1,24 @@
+{
+  "_comment": "Chinchilla scaling law parameters from Hoffmann et al., 2022",
+  "scaling_law": "chinchilla",
+  "parameters": {
+    "E": 1.69,
+    "A": 406.4,
+    "B": 410.7,
+    "alpha": 0.34,
+    "beta": 0.28
+  },
+  "compute_budget_examples": {
+    "gpt3_175b": 3.14e23,
+    "chinchilla_70b": 1.4e23,
+    "llama_7b": 8.2e21,
+    "llama_65b": 1.0e23
+  },
+  "references": {
+    "paper": "Training Compute-Optimal Large Language Models",
+    "authors": "Hoffmann et al., DeepMind",
+    "year": 2022,
+    "url": "https://arxiv.org/abs/2203.15556"
+  }
+}
+
