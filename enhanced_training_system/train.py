@@ -304,6 +304,11 @@ if block_size < model.config.block_size:
     model_args['block_size'] = block_size # so that the checkpoint will have the right value
 model.to(device)
 
+# Convert model to target dtype (important for accurate MFU calculation)
+if dtype != 'float32':
+    model = model.to(dtype=ptdtype)
+    print(f"Model converted to {dtype}")
+
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 

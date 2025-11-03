@@ -137,7 +137,7 @@ cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 torchrun --standalone --nproc_per_node=4 train.py config/arch_gpt2.py --max_iters=100
 
 # LLaMA with DDP
-torchrun --standalone --nproc_per_node=4 train.py config/arch_llama.py --max_iters=100
+torchrun --standalone --nproc_per_node=2 train.py config/arch_llama.py --max_iters=100
 ```
 
 ### ZeRO-1 (50% memory reduction)

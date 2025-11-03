@@ -24,11 +24,17 @@ wheels/
 .ipynb_checkpoints
 
 # Training outputs
-out/
-out-*/
-*.pt
-*.pth
-*.bin
+# Ignore checkpoint files in output directories
+out/**/*.pt
+out/**/*.pth
+out/**/*.bin
+out-*/**/*.pt
+out-*/**/*.pth
+out-*/**/*.bin
+
+# But allow JSON logs to be committed
+!out/**/*.json
+!out-*/**/*.json
 
 # Logs
 *.log
