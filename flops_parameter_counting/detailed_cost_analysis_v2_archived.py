@@ -117,127 +117,6 @@ REFERENCES:
 import argparse
 import json
 import math
-import re
-
-
-def load_json_with_comments(file_path):
-    """
-    Load JSON file that may contain comments (JSONC format).
-    
-    Supports:
-    - // single-line comments
-    - /* multi-line comments */
-    - # single-line comments
-    
-    Args:
-        file_path: Path to JSON/JSONC file
-    
-    Returns:
-        Parsed JSON data
-    """
-    with open(file_path, 'r') as f:
-        content = f.read()
-    
-    # Remove single-line comments (// and #)
-    content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
-    content = re.sub(r'#.*?$', '', content, flags=re.MULTILINE)
-    
-    # Remove multi-line comments (/* ... */)
-    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-    
-    # Parse cleaned JSON
-    return json.loads(content)
-
-
-def get_gpu_peak_flops(gpu_type, dtype="bfloat16"):
-    """
-    Get peak FLOPs per GPU based on GPU type and dtype.
-    
-    GPU specifications for transformer training (BF16/FP16):
-    - B200: 4,500 TFLOPS (BF16)
-    - H200: 1,979 TFLOPS (BF16)  
-    - H100 SXM: 989 TFLOPS (BF16)
-    - H100 PCIe: 756 TFLOPS (BF16)
-    - A100 80GB: 312 TFLOPS (BF16)
-    - A100 40GB: 312 TFLOPS (BF16)
-    - V100 32GB: 125 TFLOPS (FP16)
-    - A6000: 154 TFLOPS (FP16)
-    - RTX 4090: 82.6 TFLOPS (FP16)
-    
-    Args:
-        gpu_type: GPU model name (case-insensitive)
-        dtype: Data type - 'bfloat16', 'float16', 'float32'
-    
-    Returns:
-        Peak FLOPs per second (float)
-    
-    Raises:
-        ValueError: If GPU type is unknown
-    """
-    # GPU specifications database
-    # Source: NVIDIA official datasheets (dense Tensor Core performance)
-    GPU_SPECS = {
-        # NVIDIA B-series (Blackwell) - FP8 is 2× faster than BF16/FP16
-        'b200': {'fp8': 4500e12, 'bf16': 2250e12, 'fp16': 2250e12, 'fp32': 1125e12},
-        
-        # NVIDIA H-series (Hopper) - FP8 is 2× faster than BF16/FP16
-        'h200': {'fp8': 1979e12, 'bf16': 989e12, 'fp16': 989e12, 'fp32': 495e12},
-        'h100': {'fp8': 989e12, 'bf16': 495e12, 'fp16': 495e12, 'fp32': 67e12},
-        'h100-sxm': {'fp8': 989e12, 'bf16': 495e12, 'fp16': 495e12, 'fp32': 67e12},
-        'h100-pcie': {'fp8': 756e12, 'bf16': 378e12, 'fp16': 378e12, 'fp32': 51e12},
-        
-        # NVIDIA A-series (Ampere) - No native FP8, use BF16
-        'a100': {'bf16': 312e12, 'fp16': 312e12, 'fp32': 19.5e12},
-        'a100-80gb': {'bf16': 312e12, 'fp16': 312e12, 'fp32': 19.5e12},
-        'a100-40gb': {'bf16': 312e12, 'fp16': 312e12, 'fp32': 19.5e12},
-        'a6000': {'bf16': 154e12, 'fp16': 154e12, 'fp32': 38.7e12},
-        
-        # NVIDIA V-series (Volta) - No native BF16, use FP16
-        'v100': {'fp16': 125e12, 'fp32': 15.7e12},
-        'v100-32gb': {'fp16': 125e12, 'fp32': 15.7e12},
-        
-        # NVIDIA RTX (Consumer/Pro)
-        'rtx4090': {'bf16': 82.6e12, 'fp16': 82.6e12, 'fp32': 82.6e12},
-        'rtx-4090': {'bf16': 82.6e12, 'fp16': 82.6e12, 'fp32': 82.6e12},
-    }
-    
-    # Normalize GPU type and dtype
-    gpu_key = gpu_type.lower().strip()
-    dtype_key = dtype.lower().strip()
-    
-    # Map dtype variations
-    dtype_map = {
-        'float8': 'fp8',
-        'fp8': 'fp8',
-        'bfloat16': 'bf16',
-        'bf16': 'bf16',
-        'float16': 'fp16',
-        'fp16': 'fp16',
-        'half': 'fp16',
-        'float32': 'fp32',
-        'fp32': 'fp32',
-        'float': 'fp32'
-    }
-    
-    if dtype_key not in dtype_map:
-        raise ValueError(f"Unknown dtype: {dtype}. Use 'float8', 'bfloat16', 'float16', or 'float32'")
-    
-    dtype_normalized = dtype_map[dtype_key]
-    
-    # Look up GPU specs
-    if gpu_key not in GPU_SPECS:
-        raise ValueError(
-            f"Unknown GPU type: {gpu_type}\n"
-            f"Supported GPUs: {', '.join(sorted(GPU_SPECS.keys()))}\n"
-            f"You can manually specify 'peak_flops_per_gpu' in the config for custom GPUs."
-        )
-    
-    specs = GPU_SPECS[gpu_key]
-    
-    if dtype_normalized not in specs:
-        raise ValueError(f"GPU {gpu_type} doesn't have {dtype_normalized} specs")
-    
-    return specs[dtype_normalized]
 
 
 def calculate_llama_parameters(config):
@@ -455,6 +334,71 @@ def calculate_deepseek_flops_detailed(config, sequence_length=2048, batch_size=1
 
     total_flops = (num_dense_layers * dense_layer_total_flops +
                    num_moe_layers * moe_layer_total_flops)
+
+    return total_flops
+
+
+def calculate_llama_flops(config, sequence_length=2048):
+    """
+    Calculate FLOPs for LLaMA-style model using detailed academic formula.
+
+    Formula per layer (forward pass):
+    FLOPs = 12SBH² + 2aS²BH
+
+    Where:
+    - S = sequence_length
+    - B = batch_size (1 for inference, >1 for training)
+    - H = hidden_size
+    - a = num_attention_heads
+
+    Breaking down:
+    - Attention QKV projections: 6SBH²
+    - Attention scores (QK^T): aS²BH
+    - Attention output (attn × V): aS²BH
+    - Attention output projection: 2SBH²
+    - FFN up projection: 2SBH×d_ff (assuming d_ff=4H: 8SBH²)
+    - FFN down projection: 2SB×d_ff×H (assuming d_ff=4H: 8SBH²)
+
+    Reference: "Analysis of Transformer Model" - Insu Jang (2022)
+    https://insujang.github.io/2022-07-30/analysis-of-transformer-model/
+
+    Note: This is forward pass only. Training requires ~3× more (1 forward + 2 backward).
+    """
+    H = config['hidden_size']
+    D_ff = config['intermediate_size']
+    L = config['num_hidden_layers']
+    S = sequence_length
+    B = batch_size
+    a = config['num_attention_heads']
+
+    # Forward pass FLOPs per layer
+    # Reference: Insu Jang's detailed analysis
+    attention_qkv_flops = 6 * S * B * H * H  # 3 projections × 2SBH²
+    attention_scores_flops = a * S * S * B * H  # QK^T per head
+    attention_output_flops = a * S * S * B * H  # Attention @ V per head
+    attention_proj_flops = 2 * S * B * H * H  # Output projection
+
+    attention_flops = (attention_qkv_flops + attention_scores_flops +
+                      attention_output_flops + attention_proj_flops)
+
+    # FFN FLOPs (assuming d_ff = 4H as in LLaMA)
+    # FFN FLOPs (SwiGLU): two H→D_ff matmuls + one D_ff→H
+    ffn_gate_flops = 2 * S * B * H * D_ff
+    ffn_up_flops = 2 * S * B * H * D_ff
+    ffn_down_flops = 2 * S * B * D_ff * H
+    ffn_flops = ffn_gate_flops + ffn_up_flops + ffn_down_flops
+
+    # Total forward pass FLOPs per layer
+    flops_per_layer = attention_flops + ffn_flops
+
+    # Total for all layers
+    total_flops = L * flops_per_layer
+
+    # Add embedding FLOPs (negligible but included for completeness)
+    # Reference: Embedding lookup is O(1) per token, but matrix multiply if counted
+    embedding_flops = S * B * H  # Approximate embedding contribution
+
+    total_flops += embedding_flops
 
     return total_flops
 
@@ -682,18 +626,15 @@ def calculate_llama_training_flops(config, sequence_length=2048, num_training_to
 
     Total training FLOPs ≈ 3 × forward FLOPs per token × num_training_tokens
 
-    Reference: "What's the backward-forward FLOP ratio for neural networks?"
+    Reference: "What’s the backward-forward FLOP ratio for neural networks?"
     Epoch AI (2024) - https://epoch.ai/blog/backward-forward-FLOP-ratio
     Reports backward/forward ratio of ~2:1 for deep networks with large batches
 
     Alternative view (Chinchilla paper): 6ND where the 6 comes from
     2 (forward) + 4 (backward) = 6 FLOPs per parameter per token
     """
-    # Calculate forward pass FLOPs (total for entire sequence)
-    forward_flops_total = calculate_llama_flops_detailed(config, sequence_length, batch_size=1)
-    
-    # Convert to per-token FLOPs
-    forward_flops_per_token = forward_flops_total / sequence_length
+    # Calculate forward pass FLOPs per token
+    forward_flops_per_token = calculate_llama_flops_detailed(config, sequence_length, batch_size=1)
 
     # Training = forward + backward
     # Backward ≈ 2× forward (Epoch AI research)
@@ -712,15 +653,10 @@ def calculate_deepseek_training_flops(config, sequence_length=2048, num_training
     Training FLOPs = Forward FLOPs + Backward FLOPs
     Backward ≈ 2× forward (Epoch AI research)
 
-    Reference: "What's the backward-forward FLOP ratio for neural networks?"
+    Reference: "What’s the backward-forward FLOP ratio for neural networks?"
     Epoch AI (2024) - https://epoch.ai/blog/backward-forward-FLOP-ratio
     """
-    # Calculate forward pass FLOPs (total for entire sequence)
-    forward_flops_total = calculate_deepseek_flops_detailed(config, sequence_length, batch_size=1)
-    
-    # Convert to per-token FLOPs
-    forward_flops_per_token = forward_flops_total / sequence_length
-    
+    forward_flops_per_token = calculate_deepseek_flops_detailed(config, sequence_length, batch_size=1)
     training_flops_per_token = 3 * forward_flops_per_token  # 1 forward + 2 backward
     total_training_flops = training_flops_per_token * num_training_tokens
 
@@ -953,7 +889,8 @@ def model_training_cost_analysis_llama(model_config_path):
         component_breakdown: Attention vs FFN breakdown
         memory_breakdown: Memory component breakdown
     """
-    config = load_json_with_comments(model_config_path)
+    with open(model_config_path, 'r') as f:
+        config = json.load(f)
 
     # Use default sequence length from config or 2048
     seq_length = config.get('max_sequence_length', config.get('max_position_embeddings', 2048))
@@ -1087,7 +1024,8 @@ def model_training_cost_analysis_deepseek(model_config_path):
         active_params: Number of parameters activated per token
         activation_rate: Fraction of experts activated
     """
-    config = load_json_with_comments(model_config_path)
+    with open(model_config_path, 'r') as f:
+        config = json.load(f)
 
     seq_length = config.get('max_sequence_length', config.get('max_position_embeddings', 2048))
 
@@ -1122,254 +1060,61 @@ def model_training_cost_analysis_deepseek(model_config_path):
     }
 
 
-def backward_scaling_from_config(config_path):
+def get_optimal_N_D_from_cost(cost_budget):
     """
-    Backward scaling law: Calculate optimal (N, D) from training setup.
-    Uses DETAILED formulas, NOT simplified C=6ND.
-    
-    Flow:
-    1. Load architecture → Calculate N (detailed)
-    2. Load training gear → Calculate available C
-    3. Calculate training_flops_per_token from architecture (detailed)
-    4. Solve for D: D = C / training_flops_per_token
-    5. Verify against dataset constraints
-    6. Calculate loss using Chinchilla scaling law
-    
-    Args:
-        config_path: Path to backward scaling config JSON/JSONC
-    
+    Calculate optimal model size (N) and training tokens (D) given a cost budget.
+
+    Based on Chinchilla scaling laws:
+    "Training Compute-Optimal Large Language Models" (Hoffmann et al., 2022)
+
+    Key findings:
+    - Optimal N ∝ C^a (a ≈ 0.5)
+    - Optimal D ∝ C^a (a ≈ 0.5)
+    - For compute budget C, N and D should scale equally
+
+    Training FLOPs: C ≈ 6 × N × D
+
+    GPU specifications (approximate, 2024 pricing):
+    - A100 (80GB): ~312 TFLOPS (FP16), ~$2.00/hour
+    - V100 (32GB): ~125 TFLOPS (FP16), ~$1.00/hour
+    - T4 (16GB): ~65 TFLOPS (FP16), ~$0.35/hour
+
     Returns:
-        results: Dict with N, D, C, loss, and verification metrics
+        N: Optimal total model parameters (in absolute numbers)
+        D: Optimal number of training tokens (in absolute numbers)
+        training_budget_flops: Effective total training FLOPs (in FLOPs)
+        best_gpu: name of the selected GPU (one of 'A100', 'V100', 'T4')
     """
-    config = load_json_with_comments(config_path)
-    
-    print("\n" + "=" * 80)
-    print("BACKWARD SCALING LAW: Training Setup → Optimal (N, D)")
-    print("Using DETAILED formulas (NOT simplified C=6ND)")
-    print("=" * 80)
-    
-    # ========================================
-    # STEP 1: Calculate N from architecture (DETAILED)
-    # ========================================
-    
-    arch = config['architecture']
-    N = calculate_llama_parameters(arch)
-    
-    print(f"\nStep 1: Calculate N from architecture (detailed formula)")
-    print(f"  Architecture: {arch['num_hidden_layers']}L × {arch['hidden_size']}H")
-    
-    H = arch['hidden_size']
-    D_ff = arch['intermediate_size']
-    L = arch['num_hidden_layers']
-    V = arch['vocab_size']
-    
-    print(f"  N = 2VH + L(4H² + 3HD_ff + 2H) + H")
-    print(f"  Model parameters (N): {N/1e9:.2f}B")
-    
-    # ========================================
-    # STEP 2: Calculate available compute C
-    # ========================================
-    
-    gear = config['training_gear']
-    efficiency = config['training_efficiency']
-    
-    # Peak theoretical FLOPs
-    # Auto-calculate from gpu_type and dtype if not explicitly provided
-    if 'peak_flops_per_gpu' in gear:
-        peak_flops_per_gpu = gear['peak_flops_per_gpu']
-        print(f"  Using manually specified peak FLOPs: {peak_flops_per_gpu/1e12:.0f} TFLOPS")
-    else:
-        gpu_type = gear['gpu_type']
-        dtype = gear['dtype']
-        peak_flops_per_gpu = get_gpu_peak_flops(gpu_type, dtype)
-        print(f"  Auto-detected peak FLOPs for {gpu_type} ({dtype}): {peak_flops_per_gpu/1e12:.0f} TFLOPS")
-    
-    num_gpus = gear['num_gpus']
-    total_peak_flops = peak_flops_per_gpu * num_gpus
-    
-    # Actual achievable FLOPs (with MFU)
-    mfu = efficiency['expected_mfu']
-    achievable_flops_per_sec = total_peak_flops * mfu
-    
-    # Total training time
-    available_hours = gear['available_hours']
-    total_seconds = available_hours * 3600
-    
-    # Total compute budget
-    C = achievable_flops_per_sec * total_seconds
-    
-    print(f"\nStep 2: Calculate available compute (C)")
-    print(f"  GPU setup: {num_gpus}× {gear['gpu_type']}")
-    print(f"  Peak FLOPs/GPU: {peak_flops_per_gpu/1e12:.0f} TFLOPS ({gear['dtype']})")
-    print(f"  Total peak: {total_peak_flops/1e12:.0f} TFLOPS")
-    print(f"  Expected MFU: {mfu*100:.1f}%")
-    print(f"  Achievable: {achievable_flops_per_sec/1e12:.0f} TFLOPS")
-    print(f"  Training time: {available_hours:.0f} hours ({available_hours/24:.1f} days)")
-    print(f"  Compute budget (C): {C:.2e} FLOPs ({C/1e21:.2f} ZFLOPs)")
-    
-    # ========================================
-    # STEP 3: Calculate FLOPs per token (DETAILED)
-    # ========================================
-    
-    seq_len = config['dataset_constraints']['sequence_length']
-    a = arch['num_attention_heads']
-    
-    print(f"\nStep 3: Calculate FLOPs per token (detailed formula)")
-    print(f"  Sequence length: {seq_len}")
-    
-    # Calculate using DETAILED formula from the code
-    forward_flops_per_token = calculate_llama_flops_detailed(
-        arch, seq_len, batch_size=1
-    ) / seq_len
-    
-    # Training = 3× forward (1 forward + 2 backward)
-    training_flops_per_token = 3 * forward_flops_per_token
-    
-    # Show the breakdown
-    print(f"  Per layer per token (forward pass):")
-    print(f"    Attention: 8H² + 2aS²H")
-    
-    attn_h2 = 8 * H * H
-    attn_s2 = 2 * a * seq_len * H
-    print(f"             = {attn_h2/1e9:.2f} + {attn_s2/1e9:.2f} GFLOPs")
-    
-    print(f"    FFN: 6HD_ff")
-    ffn_flops = 6 * H * D_ff
-    print(f"       = {ffn_flops/1e9:.2f} GFLOPs")
-    
-    per_layer_forward = attn_h2 + attn_s2 + ffn_flops
-    print(f"    Total per layer: {per_layer_forward/1e9:.2f} GFLOPs")
-    
-    print(f"\n  Forward FLOPs/token: {L} × {per_layer_forward/1e9:.2f} = {forward_flops_per_token/1e9:.2f} GFLOPs")
-    print(f"  Training FLOPs/token: 3 × {forward_flops_per_token/1e9:.2f} = {training_flops_per_token/1e9:.2f} GFLOPs")
-    
-    # ========================================
-    # STEP 4: Solve for D (DETAILED, not 6ND!)
-    # ========================================
-    
-    print(f"\nStep 4: Solve for D using detailed formula")
-    print(f"  C = training_flops_per_token × D")
-    print(f"  D = C / training_flops_per_token")
-    
-    D_optimal = C / training_flops_per_token
-    
-    print(f"  D_optimal: {D_optimal/1e9:.2f}B tokens")
-    
-    # ========================================
-    # STEP 5: Check dataset constraints
-    # ========================================
-    
-    dataset_size = config['dataset_constraints']['dataset_size']
-    max_epochs = config['dataset_constraints']['max_epochs']
-    max_tokens = dataset_size * max_epochs
-    
-    print(f"\nStep 5: Check dataset constraints")
-    print(f"  Dataset size: {dataset_size/1e9:.2f}B tokens")
-    print(f"  Max epochs: {max_epochs}")
-    print(f"  Max allowed tokens: {max_tokens/1e9:.2f}B")
-    
-    if D_optimal > max_tokens:
-        print(f"\n  ⚠️  WARNING: Dataset constraint violated!")
-        print(f"  Optimal D: {D_optimal/1e9:.2f}B tokens")
-        print(f"  Would require: {D_optimal/dataset_size:.1f} epochs")
-        
-        # Constrain D
-        D_final = max_tokens
-        print(f"\n  → Constraining D to {D_final/1e9:.2f}B tokens ({max_epochs} epochs)")
-        constrained = True
-    else:
-        epochs = D_optimal / dataset_size
-        print(f"\n  ✓ Dataset constraint satisfied")
-        print(f"  Optimal D: {D_optimal/1e9:.2f}B tokens")
-        print(f"  Epochs needed: {epochs:.2f}")
-        D_final = D_optimal
-        constrained = False
-    
-    # ========================================
-    # STEP 6: Calculate predicted loss
-    # ========================================
-    
-    scaling_params = config['scaling_law']
-    E = scaling_params['E']
-    A = scaling_params['A']
-    B = scaling_params['B']
-    alpha = scaling_params['alpha']
-    beta = scaling_params['beta']
-    
-    loss = E + A * (N ** (-alpha)) + B * (D_final ** (-beta))
-    
-    print(f"\nStep 6: Calculate predicted loss (Chinchilla scaling law)")
-    print(f"  Base: {scaling_params['base']}")
-    print(f"  L(N, D) = E + A·N^(-α) + B·D^(-β)")
-    print(f"  L({N/1e9:.2f}B, {D_final/1e9:.2f}B)")
-    
-    term_N = A * (N ** (-alpha))
-    term_D = B * (D_final ** (-beta))
-    print(f"  = {E:.2f} + {term_N:.4f} + {term_D:.4f}")
-    print(f"  = {loss:.4f}")
-    
-    # ========================================
-    # STEP 7: Verification and Comparison
-    # ========================================
-    
-    if config.get('output_options', {}).get('verify_calculations', True):
-        print(f"\nStep 7: Verification")
-        
-        # Verify C calculation using detailed formula
-        C_verify = training_flops_per_token * D_final
-        
-        print(f"\n  Using detailed formula:")
-        print(f"    C = training_flops_per_token × D")
-        print(f"    C = {C_verify:.2e} FLOPs")
-        
-        if constrained:
-            print(f"\n  Note: Compute reduced due to dataset constraint")
-            print(f"    Requested C: {C:.2e}")
-            print(f"    Actual C used: {C_verify:.2e}")
-            print(f"    Compute utilization: {C_verify/C*100:.1f}%")
-            print(f"    Wasted compute: {(C-C_verify)/C*100:.1f}%")
-        else:
-            C_error = abs(C_verify - C) / C * 100
-            print(f"    Target C: {C:.2e}")
-            print(f"    Verification error: {C_error:.6f}%")
-        
-        # Show comparison with simplified C=6ND (for reference only!)
-        print(f"\n  Comparison with simplified C=6ND (reference only):")
-        C_simplified = 6 * N * D_final
-        print(f"    C_simplified = {C_simplified:.2e} FLOPs")
-        print(f"    Difference: {abs(C_simplified - C_verify)/C_verify*100:.1f}%")
-        print(f"    (This shows why 6ND is approximate!)")
-    
-    # ========================================
-    # STEP 8: Summary
-    # ========================================
-    
-    print(f"\n" + "=" * 80)
-    print("FINAL RESULTS (Using Detailed Formulas)")
-    print("=" * 80)
-    print(f"Model parameters (N):     {N/1e9:.2f}B")
-    print(f"Training tokens (D):      {D_final/1e9:.2f}B")
-    print(f"Compute budget (C):       {C:.2e} FLOPs")
-    if constrained:
-        print(f"Actual compute used:      {C_verify:.2e} FLOPs ({C_verify/C*100:.1f}%)")
-    print(f"Predicted loss (L):       {loss:.4f}")
-    print(f"Dataset epochs:           {D_final/dataset_size:.2f}")
-    print(f"Dataset constrained:      {constrained}")
-    print(f"FLOPs per token:          {forward_flops_per_token/1e9:.2f} GFLOPs (forward)")
-    print(f"                          {training_flops_per_token/1e9:.2f} GFLOPs (training)")
-    print("=" * 80 + "\n")
-    
-    return {
-        'N': N,
-        'D': D_final,
-        'C': C,
-        'C_actual': C_verify,
-        'loss': loss,
-        'epochs': D_final / dataset_size,
-        'constrained': constrained,
-        'training_flops_per_token': training_flops_per_token,
-        'forward_flops_per_token': forward_flops_per_token
+    # GPU specifications: (TFLOPS, cost_per_hour, memory_GB)
+    gpus = {
+        'A100': {'tflops': 312, 'cost_per_hour': 2.00, 'memory_gb': 80},
+        'V100': {'tflops': 125, 'cost_per_hour': 1.00, 'memory_gb': 32},
+        'T4': {'tflops': 65, 'cost_per_hour': 0.35, 'memory_gb': 16}
     }
+
+    # Calculate compute hours we can afford on each GPU
+    best_flops = 0
+    best_gpu = None
+
+    for gpu_name, specs in gpus.items():
+        hours = cost_budget / specs['cost_per_hour']
+        # Total FLOPs = TFLOPS × 10^12 × hours × 3600 seconds
+        total_flops = specs['tflops'] * 1e12 * hours * 3600
+
+        if total_flops > best_flops:
+            best_flops = total_flops
+            best_gpu = gpu_name
+
+    training_budget_flops = best_flops
+
+    # Chinchilla optimal scaling: C = 6 × N × D
+    # With equal scaling: N = D
+    # Therefore: C = 6 × N²
+    # N = sqrt(C / 6)
+    N = math.sqrt(training_budget_flops / 6)
+    D = N  # Optimal: equal scaling
+
+    return int(N), int(D), training_budget_flops, best_gpu
 
 
 def validate_calculations():
@@ -1480,18 +1225,15 @@ def validate_calculations():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Detailed LLM Training Cost Analysis')
-    parser.add_argument('--model_config', type=str, help='Path to model architecture config file')
-    parser.add_argument('--backward_config', type=str, help='Path to backward scaling config file')
+    parser.add_argument('--model_config', type=str, help='Path to model config file')
+    parser.add_argument('--training_budget', type=float, default=None, help='Training budget in dollars')
     parser.add_argument('--validate', action='store_true', help='Run validation tests')
     args = parser.parse_args()
 
     if args.validate:
         validate_calculations()
 
-    if args.backward_config:
-        results = backward_scaling_from_config(args.backward_config)
-
-    elif args.model_config:
+    if args.model_config:
         if 'deepseek' in args.model_config.lower():
             num_parameters, num_flops, memory_cost, enhanced_metrics = model_training_cost_analysis_deepseek(args.model_config)
             print("\n" + "=" * 80)
@@ -1559,7 +1301,8 @@ if __name__ == "__main__":
         print()
 
         # Training cost
-        config = load_json_with_comments(args.model_config)
+        with open(args.model_config, 'r') as f:
+            config = json.load(f)
 
         if 'deepseek' in args.model_config.lower():
             training_flops = calculate_deepseek_training_flops(config, num_training_tokens=1e12)
@@ -1572,5 +1315,17 @@ if __name__ == "__main__":
             training_flops = calculate_llama_training_flops(config, num_training_tokens=1e12)
             print(f"Training FLOPs (1T tokens): {training_flops / 1e18:.2f} EFLOPs")
 
+        print("=" * 80)
+
+    if args.training_budget:
+        print("\n" + "=" * 80)
+        print("Optimal Model Sizing (Chinchilla Scaling Laws)")
+        print("=" * 80)
+        N, D, training_budget_flops, best_gpu = get_optimal_N_D_from_cost(args.training_budget)
+        print(f"Training Budget:         ${args.training_budget:,.2f}")
+        print(f"Best GPU:                {best_gpu}")
+        print(f"Total Training FLOPs:    {training_budget_flops:.2e} FLOPs")
+        print(f"Optimal Model Size (N):  {N:,.0f} parameters ({N/1e9:.2f}B)")
+        print(f"Optimal Training Tokens: {D:,.0f} tokens ({D/1e9:.2f}B)")
         print("=" * 80)
 

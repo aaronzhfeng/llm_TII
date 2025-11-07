@@ -1,0 +1,182 @@
+{
+  // ============================================================================
+  // Backward Scaling Law Configuration
+  // ============================================================================
+  // Calculate optimal training tokens (D) from your training infrastructure
+  // Uses DETAILED formulas (NOT simplified C=6ND)
+  
+  "architecture": {
+    // Model architecture specification - defines N (total parameters)
+    
+    // REQUIRED: Hidden dimension (embedding size)
+    // Must be divisible by num_attention_heads
+    // Common: 768, 1024, 2048, 3072, 4096, 5120, 7168, 8192
+    "hidden_size": 4096,
+    
+    // REQUIRED: FFN intermediate dimension
+    // Usually 4×hidden_size or 3.5×hidden_size for SwiGLU
+    // Common ratios: 2.5, 3.5, 4.0, 5.3
+    "intermediate_size": 11008,
+    
+    // REQUIRED: Number of transformer layers
+    // More layers = deeper model
+    // Common: 12, 16, 24, 32, 40, 48, 64, 80
+    "num_hidden_layers": 32,
+    
+    // REQUIRED: Number of attention heads
+    // Must divide hidden_size evenly
+    // head_dim = hidden_size / num_attention_heads (usually 64-128)
+    // Common: 8, 12, 16, 20, 24, 28, 32, 40, 64
+    "num_attention_heads": 32,
+    
+    // REQUIRED: Vocabulary size
+    // Larger = more tokens, better multilingual support
+    // Common: 32000 (LLaMA), 50000, 50257 (GPT), 100000, 128000, 256000
+    "vocab_size": 50000,
+    
+    // OPTIONAL: Maximum sequence length
+    // Default: 2048
+    // Common: 512, 1024, 2048, 4096, 8192, 32768, 131072
+    "max_position_embeddings": 2048,
+    
+    // OPTIONAL: Share input and output embeddings
+    // Default: false
+    // If true, saves ~vocab_size × hidden_size parameters
+    "tie_word_embeddings": false
+  },
+  
+  "training_gear": {
+    // GPU cluster configuration - defines available compute
+    
+    // REQUIRED: GPU type name
+    // System will AUTO-DETECT peak FLOPs from this and dtype
+    // Supported: 'B200', 'H200', 'H100', 'H100-SXM', 'H100-PCIe',
+    //            'A100', 'A100-80GB', 'A100-40GB', 'A6000',
+    //            'V100', 'V100-32GB', 'RTX4090', 'RTX-4090'
+    "gpu_type": "H100",
+    
+    // REQUIRED: Total number of GPUs in your cluster
+    // Any positive integer: 1, 4, 8, 16, 32, 64, 128, 256, 512, 1024, ...
+    "num_gpus": 8,
+    
+    // REQUIRED: Total training time budget (hours)
+    // Common: 168 (1 week), 720 (30 days), 2160 (90 days)
+    "available_hours": 720,
+    
+    // REQUIRED: Training precision
+    // System will AUTO-DETECT appropriate peak FLOPs for this dtype
+    // Common: 'bfloat16' (recommended), 'float16', 'float32'
+    "dtype": "bfloat16"
+    
+    // OPTIONAL: Manual override for peak FLOPs/sec per GPU
+    // Only needed for custom/unknown GPUs
+    // If omitted, system auto-detects from gpu_type and dtype
+    // Auto-detection reference (BF16):
+    //   B200: 4500 TF, H200: 1979 TF, H100: 989 TF
+    //   A100: 312 TF, V100: 125 TF, RTX4090: 82.6 TF
+    // "peak_flops_per_gpu": 989e12  // Uncomment only if needed
+  },
+  
+  "training_efficiency": {
+    // Training efficiency parameters
+    
+    // REQUIRED: Model FLOPs Utilization (MFU)
+    // Fraction of peak FLOPs actually achieved
+    // Range: 0.1 to 0.7, Typical: 0.3-0.5 (30-50%)
+    // Reference:
+    //   Poor (basic setup): 0.15
+    //   Good (optimized): 0.35
+    //   Excellent (state-of-art): 0.50
+    //   Theoretical max: 0.70
+    "expected_mfu": 0.45,
+    
+    // OPTIONAL: Per-device micro-batch size
+    // Default: 1
+    // For calculation purposes, usually set to 1
+    "batch_size": 1,
+    
+    // OPTIONAL: Number of gradient accumulation steps
+    // Default: 1
+    // Effective batch = batch_size × accum_steps × num_gpus
+    "gradient_accumulation_steps": 1
+  },
+  
+  "dataset_constraints": {
+    // Dataset size and sequence length constraints
+    
+    // REQUIRED: Total unique tokens in training corpus
+    // Examples: C4=365B, RefinedWeb=600B, RedPajama=1.2T
+    // Common: 1e11 (100B), 1e12 (1T), 1.5e12 (1.5T), 1e13 (10T)
+    "dataset_size": 1e12,
+    
+    // REQUIRED: Maximum times to repeat the dataset
+    // WARNING: High epochs (>3) may cause overfitting
+    // Chinchilla recommends 1 epoch (single pass)
+    // Set high (100) to effectively disable constraint
+    // Common: 1, 2, 3, 10, 100
+    "max_epochs": 100,
+    
+    // REQUIRED: Training sequence length
+    // Affects FLOPs calculation (S² attention scaling)
+    // Must be ≤ max_position_embeddings
+    // Common: 512, 1024, 2048, 4096, 8192, 16384, 32768
+    "sequence_length": 2048
+  },
+  
+  "scaling_law": {
+    // Scaling law parameters for loss prediction
+    // L(N, D) = E + A·N^(-α) + B·D^(-β)
+    
+    // REQUIRED: Which scaling law to use
+    // Options: 'hoffmann_2022' (Chinchilla paper) or 'besiroglu_2024' (Epoch AI)
+    "base": "hoffmann_2022",
+    
+    // REQUIRED: Irreducible loss (minimum achievable)
+    // Hoffmann (2022): 1.69
+    // Besiroglu (2024): 1.8172
+    "E": 1.69,
+    
+    // REQUIRED: Parameter scaling coefficient
+    // Controls how loss decreases with model size
+    // Hoffmann (2022): 406.4
+    // Besiroglu (2024): 482.01
+    "A": 406.4,
+    
+    // REQUIRED: Data scaling coefficient
+    // Controls how loss decreases with data size
+    // Hoffmann (2022): 410.7
+    // Besiroglu (2024): 2085.43
+    "B": 410.7,
+    
+    // REQUIRED: Parameter scaling exponent
+    // Loss decreases as N^(-alpha)
+    // Hoffmann (2022): 0.34
+    // Besiroglu (2024): 0.3478
+    "alpha": 0.34,
+    
+    // REQUIRED: Data scaling exponent
+    // Loss decreases as D^(-beta)
+    // Hoffmann (2022): 0.28
+    // Besiroglu (2024): 0.3658
+    "beta": 0.28
+    
+    // References:
+    // - Hoffmann et al., "Training Compute-Optimal Large Language Models" (2022)
+    //   https://arxiv.org/abs/2203.15556
+    // - Besiroglu et al., Epoch AI re-analysis (2024)
+    //   https://epochai.org/blog/scaling-laws
+  },
+  
+  "output_options": {
+    // Output formatting options
+    
+    // OPTIONAL: Show detailed FLOPs breakdown per layer
+    // Default: true
+    "show_breakdown": true,
+    
+    // OPTIONAL: Show verification and C=6ND comparison
+    // Default: true
+    "verify_calculations": true
+  }
+}
+

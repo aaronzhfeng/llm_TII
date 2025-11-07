@@ -7,14 +7,17 @@ A comprehensive tool for calculating parameters, FLOPs, and memory requirements 
 ```bash
 cd /Users/aaronfeng/Repo/llm_TII/flops_parameter_counting/
 
-# Analyze LLaMA 7B with detailed academic formulas
+# Analyze existing model architecture
 python detailed_cost_analysis.py --model_config llama_7b_config.json
+
+# Analyze with annotated example (JSONC with comments)
+python detailed_cost_analysis.py --model_config example_llama_config.jsonc
 
 # Analyze DeepSeek V3 MoE model
 python detailed_cost_analysis.py --model_config deepseek_v3_config.json
 
-# Find optimal model size for $10,000 budget
-python detailed_cost_analysis.py --training_budget 10000
+# NEW: Backward scaling - Find optimal D from training setup
+python detailed_cost_analysis.py --backward_config backward_scaling_config.jsonc
 
 # Run validation tests
 python detailed_cost_analysis.py --validate
@@ -58,20 +61,35 @@ python detailed_cost_analysis.py --help
 python detailed_cost_analysis.py [OPTIONS]
 
 Options:
-  --model_config PATH    Path to model configuration JSON file
-  --training_budget FLOAT  Training budget in dollars for optimization
-  --validate             Run validation tests
-  --help                 Show help message
+  --model_config PATH      Path to model architecture config file (forward analysis)
+  --backward_config PATH   Path to backward scaling config file (backward analysis)
+  --validate               Run validation tests
+  --help                   Show help message
 ```
 
-### Model Configuration Files
+### Configuration Files
 
-The tool accepts JSON configuration files in the standard Hugging Face format:
+The tool accepts two types of configuration files in **JSON or JSONC** format (JSONC supports comments with `//` or `/* */`):
 
+**1. Model Architecture Configs** (for forward analysis):
 - `llama_7b_config.json` - LLaMA 7B model configuration
 - `deepseek_v3_config.json` - DeepSeek V3 MoE model configuration
+- `example_llama_config.jsonc` - Annotated example with comments explaining all parameters
+- Standard Hugging Face format with architecture parameters
 
-You can also create custom configurations following the same format.
+**2. Backward Scaling Config** (for backward analysis - NEW!):
+- `backward_scaling_config.jsonc` - Complete training setup specification with inline comments
+- Includes: architecture, GPU setup, training hours, MFU, dataset constraints, scaling law parameters
+- All parameters annotated with REQUIRED/OPTIONAL and default values
+- Includes GPU specifications reference and scaling law parameter comparison
+
+The backward config allows you to specify your entire training infrastructure and constraints, and the system will automatically calculate:
+- **N** (model parameters) from architecture
+- **C** (compute budget) from GPU setup and training time
+- **D** (optimal training tokens) from C and architecture
+- **L** (predicted loss) from Chinchilla scaling law
+
+**Note:** The system supports both `.json` (standard) and `.jsonc` (with comments) file formats.
 
 ## 🎯 Examples
 
@@ -144,22 +162,77 @@ Training FLOPs (1T tokens): 375433828.76 EFLOPs
 ================================================================================
 ```
 
-### Example 3: Budget Optimization
+### Example 3: Backward Scaling Law (NEW!)
 
 ```bash
-python detailed_cost_analysis.py --training_budget 10000
+python detailed_cost_analysis.py --backward_config backward_scaling_config.json
 ```
 
 **Output**:
 ```
 ================================================================================
-Optimal Model Sizing (Chinchilla Scaling Laws)
+BACKWARD SCALING LAW: Training Setup → Optimal (N, D)
+Using DETAILED formulas (NOT simplified C=6ND)
 ================================================================================
-Training Budget:         $10,000.00
-Best GPU:                T4
-Total Training FLOPs:    6.69e+21 FLOPs
-Optimal Model Size (N):  33,380,918,415 parameters (33.38B)
-Optimal Training Tokens: 33,380,918,415 tokens (33.38B)
+
+Step 1: Calculate N from architecture (detailed formula)
+  Architecture: 32L × 4096H
+  N = 2VH + L(4H² + 3HD_ff + 2H) + H
+  Model parameters (N): 6.74B
+
+Step 2: Calculate available compute (C)
+  GPU setup: 8× H100
+  Peak FLOPs/GPU: 989 TFLOPS (bfloat16)
+  Total peak: 7912 TFLOPS
+  Expected MFU: 45.0%
+  Achievable: 3560 TFLOPS
+  Training time: 720 hours (30.0 days)
+  Compute budget (C): 9.22e+21 FLOPs (9.22 ZFLOPs)
+
+Step 3: Calculate FLOPs per token (detailed formula)
+  Sequence length: 2048
+  Per layer per token (forward pass):
+    Attention: 8H² + 2aS²H
+             = 0.13 + 1.10 GFLOPs
+    FFN: 6HD_ff
+       = 0.27 GFLOPs
+    Total per layer: 1.50 GFLOPs
+
+  Forward FLOPs/token: 32 × 1.50 = 48.00 GFLOPs
+  Training FLOPs/token: 3 × 48.00 = 144.00 GFLOPs
+
+Step 4: Solve for D using detailed formula
+  C = training_flops_per_token × D
+  D = C / training_flops_per_token
+  D_optimal: 64.03B tokens
+
+Step 5: Check dataset constraints
+  Dataset size: 1000.00B tokens
+  Max epochs: 100
+  Max allowed tokens: 100000.00B
+
+  ✓ Dataset constraint satisfied
+  Optimal D: 64.03B tokens
+  Epochs needed: 0.06
+
+Step 6: Calculate predicted loss (Chinchilla scaling law)
+  Base: hoffmann_2022
+  L(N, D) = E + A·N^(-α) + B·D^(-β)
+  L(6.74B, 64.03B)
+  = 1.69 + 0.1234 + 0.3456
+  = 2.1590
+
+================================================================================
+FINAL RESULTS (Using Detailed Formulas)
+================================================================================
+Model parameters (N):     6.74B
+Training tokens (D):      64.03B
+Compute budget (C):       9.22e+21 FLOPs
+Predicted loss (L):       2.1590
+Dataset epochs:           0.06
+Dataset constrained:      False
+FLOPs per token:          48.00 GFLOPs (forward)
+                          144.00 GFLOPs (training)
 ================================================================================
 ```
 
@@ -422,9 +495,12 @@ This implementation is for educational and research purposes. Refer to the origi
 
 | Command | Purpose | Example |
 |---------|---------|---------|
-| `--model_config llama_7b_config.json` | Analyze LLaMA model | `python detailed_cost_analysis.py --model_config llama_7b_config.json` |
+| `--model_config llama_7b_config.json` | Analyze existing architecture | `python detailed_cost_analysis.py --model_config llama_7b_config.json` |
+| `--model_config example_llama_config.jsonc` | Analyze with annotated example | `python detailed_cost_analysis.py --model_config example_llama_config.jsonc` |
 | `--model_config deepseek_v3_config.json` | Analyze MoE model | `python detailed_cost_analysis.py --model_config deepseek_v3_config.json` |
-| `--training_budget 10000` | Find optimal model size | `python detailed_cost_analysis.py --training_budget 10000` |
+| `--backward_config backward_scaling_config.jsonc` | **NEW:** Find optimal D from training setup | `python detailed_cost_analysis.py --backward_config backward_scaling_config.jsonc` |
 | `--validate` | Run validation tests | `python detailed_cost_analysis.py --validate` |
+
+**Note:** Both `.json` and `.jsonc` (with comments) formats are supported.
 
 **Ready to use!** 🎉

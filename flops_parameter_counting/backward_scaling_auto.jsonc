@@ -1,0 +1,54 @@
+{
+  // ============================================================================
+  // Backward Scaling Law - Auto-Detection Example
+  // ============================================================================
+  // This example shows AUTO-DETECTION of peak_flops_per_gpu
+  // System automatically determines GPU specs from gpu_type and dtype
+  
+  "architecture": {
+    "hidden_size": 4096,
+    "intermediate_size": 11008,
+    "num_hidden_layers": 32,
+    "num_attention_heads": 32,
+    "vocab_size": 50000,
+    "max_position_embeddings": 2048,
+    "tie_word_embeddings": false
+  },
+  
+  "training_gear": {
+    // Only specify gpu_type and dtype
+    // System AUTO-DETECTS peak FLOPs!
+    "gpu_type": "H100",        // Will detect: 989 TFLOPS (BF16)
+    "num_gpus": 8,
+    "available_hours": 720,
+    "dtype": "bfloat16"
+    // ✅ peak_flops_per_gpu NOT specified - will auto-detect!
+  },
+  
+  "training_efficiency": {
+    "expected_mfu": 0.45,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 1
+  },
+  
+  "dataset_constraints": {
+    "dataset_size": 1e12,
+    "max_epochs": 100,
+    "sequence_length": 2048
+  },
+  
+  "scaling_law": {
+    "base": "hoffmann_2022",
+    "E": 1.69,
+    "A": 406.4,
+    "B": 410.7,
+    "alpha": 0.34,
+    "beta": 0.28
+  },
+  
+  "output_options": {
+    "show_breakdown": true,
+    "verify_calculations": true
+  }
+}
+
