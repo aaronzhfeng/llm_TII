@@ -113,28 +113,34 @@ cd ../..
 ### **Test Different Architectures (Single GPU)**
 ```bash
 # GPT-2 architecture (baseline)
-python train.py config/arch_gpt2.py --max_iters=100
+python train.py config/full_gpt2_124m.py --max_iters=100
 
 # LLaMA architecture (RoPE + RMSNorm + SwiGLU)
-python train.py config/arch_llama.py --max_iters=100
+python train.py config/full_llama_124m.py --max_iters=100
+
+# LLaMA 1.36B (production model)
+python train.py config/full_llama_1.36b.py --max_iters=100
 
 # Team's model_v1 architecture
-python train.py config/arch_team.py --max_iters=100
+python train.py config/full_team_124m.py --max_iters=100
 
 # Custom architecture (experiment!)
-python train.py config/arch_custom.py --max_iters=100
+python train.py config/full_custom.py --max_iters=100
+
+# Quick test (small model)
+python train.py config/preset_quick_test.py --max_iters=100
 ```
 
 ### **Override Architecture On-the-Fly**
 ```bash
 # Take GPT-2 but use RoPE instead of learned positions
-python train.py config/arch_gpt2.py --position_encoding=rope
+python train.py config/full_gpt2_124m.py --position_encoding=rope
 
 # Take LLaMA but use LayerNorm instead of RMSNorm
-python train.py config/arch_llama.py --normalization=layernorm_nobias
+python train.py config/full_llama_124m.py --normalization=layernorm_nobias
 
 # Mix any components you want!
-python train.py config/arch_custom.py \
+python train.py config/full_custom.py \
   --normalization=rmsnorm \
   --position_encoding=rope \
   --ffn_type=standard \
@@ -144,19 +150,22 @@ python train.py config/arch_custom.py \
 ### **Multi-GPU Training (4 GPUs)**
 ```bash
 # Standard DDP
-torchrun --standalone --nproc_per_node=4 train.py config/arch_llama.py
+torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py
 
 # With ZeRO-1 (50% memory reduction)
-torchrun --standalone --nproc_per_node=4 train.py config/arch_gpt2.py --use_zero1=True
+torchrun --standalone --nproc_per_node=4 train.py config/full_gpt2_124m.py --use_zero1=True
 
 # With FSDP (75-88% memory reduction)
-torchrun --standalone --nproc_per_node=4 train.py config/arch_llama.py --use_fsdp=True
+torchrun --standalone --nproc_per_node=4 train.py config/full_llama_1.36b.py --use_fsdp=True
 ```
 
-### **HGX B200 Training** (Future)
+### **HGX B200 Training** (Production - 1.36B Model)
 ```bash
-# The system auto-detects B200 and uses 4500 TFLOPS peak
-torchrun --standalone --nproc_per_node=8 train.py config/arch_llama.py --use_fsdp=True
+# LLaMA 1.36B on 8x B200 with FSDP
+torchrun --standalone --nproc_per_node=8 train.py \
+  config/full_llama_1.36b.py \
+  --dataset=slimpajama_627b \
+  --use_fsdp=True
 ```
 
 ## ⚙️ Configuration
@@ -165,11 +174,24 @@ torchrun --standalone --nproc_per_node=8 train.py config/arch_llama.py --use_fsd
 
 **All architectural choices are configurable!** No code changes needed.
 
-#### **Architecture Config Files:**
-- `config/arch_gpt2.py` - GPT-2 standard (baseline)
-- `config/arch_llama.py` - LLaMA-style (RoPE + RMSNorm + SwiGLU)
-- `config/arch_team.py` - Team's model_v1
-- `config/arch_custom.py` - Experiment with any combination
+#### **Configuration Files:**
+
+**Full Configurations (Architecture + Training):**
+- `config/full_gpt2_124m.py` - GPT-2 124M (baseline)
+- `config/full_llama_124m.py` - LLaMA 124M (for comparison)
+- `config/full_gpt2_1.36b.py` - **GPT-2 1.36B (production - direct comparison)**
+- `config/full_llama_1.36b.py` - **LLaMA 1.36B (production model)**
+- `config/full_team_124m.py` - Team's model_v1
+- `config/full_custom.py` - Experiment with any combination
+
+**Training Presets (Override configs):**
+- `config/preset_quick_test.py` - Quick testing (small model)
+- `config/preset_gpt2_owt.py` - GPT-2 on OpenWebText
+
+**Documentation:**
+- `config/ARCH_GPT2.md` - GPT-2 architecture explained
+- `config/ARCH_LLAMA.md` - LLaMA architecture explained
+- `config/PARAMETER_FORMULAS.md` - **Parameter counting formulas and design options**
 
 #### **Architectural Options**
 
@@ -189,22 +211,22 @@ torchrun --standalone --nproc_per_node=8 train.py config/arch_llama.py --use_fsd
 
 ```bash
 # Override architecture components
-python train.py config/arch_gpt2.py \
+python train.py config/full_gpt2_124m.py \
   --normalization=rmsnorm \
   --position_encoding=rope \
   --ffn_type=swiglu
 
 # Override training parameters
-python train.py config/arch_llama.py \
+python train.py config/full_llama_1.36b.py \
   --batch_size=16 \
   --learning_rate=3e-4 \
   --max_iters=10000 \
   --compile=False
-```
 
-### Training Config Files (Data & Optimization)
-- `config/train_gpt2.py` - GPT-2 124M on OpenWebText (legacy format)
-- `config/train_shakespeare.py` - Small model for testing (legacy format)
+# Use different dataset
+python train.py config/full_llama_1.36b.py \
+  --dataset=slimpajama_627b
+```
 
 ### Key Parameters
 
@@ -282,19 +304,19 @@ Test the impact of individual components:
 
 ```bash
 # Baseline: GPT-2
-python train.py config/arch_gpt2.py --max_iters=5000
+python train.py config/full_gpt2_124m.py --max_iters=5000
 
 # Ablation 1: GPT-2 + RoPE (test RoPE benefit)
-python train.py config/arch_gpt2.py --position_encoding=rope --max_iters=5000
+python train.py config/full_gpt2_124m.py --position_encoding=rope --max_iters=5000
 
 # Ablation 2: GPT-2 + RMSNorm (test RMSNorm benefit)
-python train.py config/arch_gpt2.py --normalization=rmsnorm --max_iters=5000
+python train.py config/full_gpt2_124m.py --normalization=rmsnorm --max_iters=5000
 
 # Ablation 3: GPT-2 + SwiGLU (test SwiGLU benefit)
-python train.py config/arch_gpt2.py --ffn_type=swiglu --max_iters=5000
+python train.py config/full_gpt2_124m.py --ffn_type=swiglu --max_iters=5000
 
 # Full LLaMA (all improvements)
-python train.py config/arch_llama.py --max_iters=5000
+python train.py config/full_llama_124m.py --max_iters=5000
 
 # Compare JSON logs to see which helps most!
 ```
@@ -311,7 +333,7 @@ python train.py config/arch_llama.py --max_iters=5000
 ### Example Combinations
 
 ```python
-# In config/arch_custom.py:
+# In config/full_custom.py:
 
 # Experiment 1: Best of GPT-2 + LLaMA
 arch_preset = 'custom'
@@ -430,12 +452,15 @@ enhanced_training_system/
 ├── model.py                    # Legacy GPT-2 (backward compatibility)
 │
 ├── config/
-│   ├── arch_gpt2.py           # GPT-2 architecture config
-│   ├── arch_llama.py          # LLaMA architecture config
-│   ├── arch_team.py           # Team's model_v1 config
-│   ├── arch_custom.py         # Custom experiment template
-│   ├── train_gpt2.py          # Legacy format (still works)
-│   └── train_shakespeare.py   # Legacy format (still works)
+│   ├── ARCH_GPT2.md           # GPT-2 architecture documentation
+│   ├── ARCH_LLAMA.md          # LLaMA architecture documentation
+│   ├── full_gpt2_124m.py      # GPT-2 124M config
+│   ├── full_llama_124m.py     # LLaMA 124M config
+│   ├── full_llama_1.36b.py    # LLaMA 1.36B production config
+│   ├── full_team_124m.py      # Team's model_v1 config
+│   ├── full_custom.py         # Custom experiment template
+│   ├── preset_quick_test.py   # Quick testing preset
+│   └── preset_gpt2_owt.py     # GPT-2 OpenWebText preset
 │
 ├── docs/                       # Archived detailed documentation
 │   ├── QUICK_START.md         # Quick testing guide
@@ -470,7 +495,7 @@ cd ../..
 ### 3. Run Quick Test
 ```bash
 python test_imports.py  # Verify system works
-python train.py config/arch_gpt2.py --max_iters=50 --compile=False
+python train.py config/full_gpt2_124m.py --max_iters=50 --compile=False
 ```
 
 ### 4. See All Testing Commands

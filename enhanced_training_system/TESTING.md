@@ -15,7 +15,7 @@ cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 python test_imports.py
 
 # Quick 50-iteration test
-python train.py config/arch_gpt2.py --max_iters=50 --compile=False
+python train.py config/full_gpt2_124m.py --max_iters=50 --compile=False
 ```
 
 **Expected output:**
@@ -50,16 +50,16 @@ python test_imports.py
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Test GPT-2 architecture
-python train.py config/arch_gpt2.py --max_iters=100 --compile=False
+python train.py config/full_gpt2_124m.py --max_iters=100 --compile=False
 
 # Test LLaMA architecture
-python train.py config/arch_llama.py --max_iters=100 --compile=False
+python train.py config/full_llama_124m.py --max_iters=100 --compile=False
 
 # Test team's model_v1 architecture
-python train.py config/arch_team.py --max_iters=100 --compile=False
+python train.py config/full_team_124m.py --max_iters=100 --compile=False
 
 # Test custom architecture
-python train.py config/arch_custom.py --max_iters=100 --compile=False
+python train.py config/full_custom.py --max_iters=100 --compile=False
 ```
 
 **Verify:**
@@ -78,22 +78,22 @@ Test impact of individual architectural components:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Baseline: GPT-2
-python train.py config/arch_gpt2.py --max_iters=500 --compile=False
+python train.py config/full_gpt2_124m.py --max_iters=500 --compile=False
 
 # Test 1: GPT-2 + RoPE (test position encoding)
-python train.py config/arch_gpt2.py --position_encoding=rope --max_iters=500 --compile=False
+python train.py config/full_gpt2_124m.py --position_encoding=rope --max_iters=500 --compile=False
 
 # Test 2: GPT-2 + RMSNorm (test normalization)
-python train.py config/arch_gpt2.py --normalization=rmsnorm --max_iters=500 --compile=False
+python train.py config/full_gpt2_124m.py --normalization=rmsnorm --max_iters=500 --compile=False
 
 # Test 3: GPT-2 + SwiGLU (test FFN type)
-python train.py config/arch_gpt2.py --ffn_type=swiglu --max_iters=500 --compile=False
+python train.py config/full_gpt2_124m.py --ffn_type=swiglu --max_iters=500 --compile=False
 
 # Test 4: GPT-2 + Pre-norm (test norm position)
-python train.py config/arch_gpt2.py --norm_position=pre --max_iters=500 --compile=False
+python train.py config/full_gpt2_124m.py --norm_position=pre --max_iters=500 --compile=False
 
 # Test 5: Full LLaMA (all improvements)
-python train.py config/arch_llama.py --max_iters=500 --compile=False
+python train.py config/full_llama_124m.py --max_iters=500 --compile=False
 
 # Compare all runs
 python compare_architectures.py --latest 6
@@ -107,9 +107,9 @@ python compare_architectures.py --latest 6
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Run all presets with same training config
-python train.py config/arch_gpt2.py --max_iters=1000
-python train.py config/arch_llama.py --max_iters=1000
-python train.py config/arch_team.py --max_iters=1000
+python train.py config/full_gpt2_124m.py --max_iters=1000
+python train.py config/full_llama_124m.py --max_iters=1000
+python train.py config/full_team_124m.py --max_iters=1000
 
 # Compare results
 python compare_architectures.py --latest 3
@@ -134,20 +134,20 @@ python compare_architectures.py --latest 3
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # GPT-2 with DDP
-torchrun --standalone --nproc_per_node=4 train.py config/arch_gpt2.py --max_iters=100
+torchrun --standalone --nproc_per_node=4 train.py config/full_gpt2_124m.py --max_iters=100
 
 # LLaMA with DDP
-torchrun --standalone --nproc_per_node=2 train.py config/arch_llama.py --max_iters=100
+torchrun --standalone --nproc_per_node=2 train.py config/full_llama_124m.py --max_iters=100
 ```
 
 ### ZeRO-1 (50% memory reduction)
 ```bash
-torchrun --standalone --nproc_per_node=4 train.py config/arch_gpt2.py --use_zero1=True --max_iters=100
+torchrun --standalone --nproc_per_node=4 train.py config/full_gpt2_124m.py --use_zero1=True --max_iters=100
 ```
 
 ### FSDP (75-88% memory reduction)
 ```bash
-torchrun --standalone --nproc_per_node=4 train.py config/arch_llama.py --use_fsdp=True --max_iters=100
+torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py --use_fsdp=True --max_iters=100
 ```
 
 **Verify:**
@@ -166,10 +166,10 @@ Test that architecture can be overridden on command line:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Override single component
-python train.py config/arch_gpt2.py --normalization=rmsnorm --max_iters=50
+python train.py config/full_gpt2_124m.py --normalization=rmsnorm --max_iters=50
 
 # Override multiple components
-python train.py config/arch_gpt2.py \
+python train.py config/full_gpt2_124m.py \
   --normalization=rmsnorm \
   --position_encoding=rope \
   --ffn_type=swiglu \
@@ -177,7 +177,7 @@ python train.py config/arch_gpt2.py \
   --max_iters=50
 
 # Override training params
-python train.py config/arch_llama.py \
+python train.py config/full_llama_124m.py \
   --batch_size=16 \
   --learning_rate=3e-4 \
   --max_iters=50
@@ -193,7 +193,7 @@ Verify logs contain architecture information:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Run a quick test
-python train.py config/arch_llama.py --max_iters=50 --compile=False
+python train.py config/full_llama_124m.py --max_iters=50 --compile=False
 
 # Check JSON log
 latest_log=$(ls -t out/run_*.json | head -1)
@@ -217,11 +217,11 @@ Verify MFU calculation differs by architecture:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # GPT-2 (Standard FFN)
-python train.py config/arch_gpt2.py --max_iters=50 --compile=False | grep "FLOPs per token"
+python train.py config/full_gpt2_124m.py --max_iters=50 --compile=False | grep "FLOPs per token"
 # Expected: ~28-29 GFLOPs per token
 
 # LLaMA (SwiGLU FFN)
-python train.py config/arch_llama.py --max_iters=50 --compile=False | grep "FLOPs per token"
+python train.py config/full_llama_124m.py --max_iters=50 --compile=False | grep "FLOPs per token"
 # Expected: ~35-36 GFLOPs per token (higher due to SwiGLU)
 
 # Difference: ~25% more FLOPs for LLaMA
@@ -237,7 +237,7 @@ Verify memory statistics are logged:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Run with memory logging
-python train.py config/arch_gpt2.py --max_iters=50 --compile=False | grep "Memory:"
+python train.py config/full_gpt2_124m.py --max_iters=50 --compile=False | grep "Memory:"
 
 # Should show:
 # 💾 Memory: X.XX GB alloc │ Y.YY GB peak │ Z.ZZ GB reserved
@@ -253,7 +253,7 @@ Verify gradients are tracked:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Run with gradient logging (every 10 iters by default)
-python train.py config/arch_gpt2.py --max_iters=50 --compile=False --gradient_log_interval=10 | grep "Gradients:"
+python train.py config/full_gpt2_124m.py --max_iters=50 --compile=False --gradient_log_interval=10 | grep "Gradients:"
 
 # Should show:
 # 📊 Gradients: norm=X.XXXX │ mean=X.XXe-XX │ std=X.XXe-XX
@@ -269,7 +269,7 @@ When on HGX B200:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Run on B200
-python train.py config/arch_llama.py --max_iters=50
+python train.py config/full_llama_124m.py --max_iters=50
 
 # Verify startup shows:
 # 🖥️  HARDWARE:
@@ -289,7 +289,7 @@ Test unusual/experimental combinations:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Combination 1: RoPE + LayerNorm + GELU (hybrid)
-python train.py config/arch_custom.py \
+python train.py config/full_custom.py \
   --arch_preset=custom \
   --normalization=layernorm_nobias \
   --position_encoding=rope \
@@ -298,7 +298,7 @@ python train.py config/arch_custom.py \
   --max_iters=100
 
 # Combination 2: Learned + RMSNorm + SwiGLU (reverse hybrid)
-python train.py config/arch_custom.py \
+python train.py config/full_custom.py \
   --arch_preset=custom \
   --normalization=rmsnorm \
   --position_encoding=learned_absolute \
@@ -306,7 +306,7 @@ python train.py config/arch_custom.py \
   --max_iters=100
 
 # Combination 3: All modern except position encoding
-python train.py config/arch_custom.py \
+python train.py config/full_custom.py \
   --arch_preset=custom \
   --normalization=rmsnorm \
   --position_encoding=learned_absolute \
@@ -325,10 +325,10 @@ Test checkpointing works with modular architectures:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Train for a while
-python train.py config/arch_llama.py --max_iters=100 --eval_interval=50
+python train.py config/full_llama_124m.py --max_iters=100 --eval_interval=50
 
 # Resume from checkpoint
-python train.py config/arch_llama.py --init_from=resume --max_iters=200
+python train.py config/full_llama_124m.py --init_from=resume --max_iters=200
 
 # Verify:
 # - Architecture loaded from checkpoint
@@ -346,7 +346,7 @@ Test that legacy GPT model still works:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Use legacy model
-python train.py config/train_shakespeare.py --max_iters=50 --compile=False
+python train.py config/preset_quick_test.py --max_iters=50 --compile=False
 
 # Should work but without modular architecture features
 ```
@@ -361,21 +361,21 @@ Complete workflow to compare architectures systematically:
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 
 # Day 1: Baseline
-python train.py config/arch_gpt2.py --max_iters=2000 --compile=False
+python train.py config/full_gpt2_124m.py --max_iters=2000 --compile=False
 
 # Day 2: Component ablations
-python train.py config/arch_gpt2.py --position_encoding=rope --max_iters=2000 --compile=False
-python train.py config/arch_gpt2.py --normalization=rmsnorm --max_iters=2000 --compile=False
-python train.py config/arch_gpt2.py --ffn_type=swiglu --max_iters=2000 --compile=False
+python train.py config/full_gpt2_124m.py --position_encoding=rope --max_iters=2000 --compile=False
+python train.py config/full_gpt2_124m.py --normalization=rmsnorm --max_iters=2000 --compile=False
+python train.py config/full_gpt2_124m.py --ffn_type=swiglu --max_iters=2000 --compile=False
 
 # Day 3: Full LLaMA
-python train.py config/arch_llama.py --max_iters=2000 --compile=False
+python train.py config/full_llama_124m.py --max_iters=2000 --compile=False
 
 # Day 4: Compare all
 python compare_architectures.py --latest 5
 
 # Day 5: Pick best and run longer
-python train.py config/arch_llama.py --max_iters=10000
+python train.py config/full_llama_124m.py --max_iters=10000
 ```
 
 ---
@@ -428,7 +428,7 @@ After running tests, verify:
 
 ## 🚦 Expected Results by Architecture
 
-### GPT-2 (arch_gpt2.py)
+### GPT-2 (full_gpt2_124m.py)
 ```
 Architecture Name:     12L-12H-768D-AbsPos-LN-NB-GELU-PostNorm
 FLOPs per token:       ~28.45 GFLOPs
@@ -436,7 +436,7 @@ Attention/FFN ratio:   ~0.67
 Expected MFU (A100):   30-35%
 ```
 
-### LLaMA (arch_llama.py)
+### LLaMA (full_llama_124m.py)
 ```
 Architecture Name:     12L-12H-768D-RoPE-RMS-SwiGLU-PreNorm
 FLOPs per token:       ~35.12 GFLOPs (25% higher due to SwiGLU)
@@ -444,13 +444,13 @@ Attention/FFN ratio:   ~0.52 (more FFN compute)
 Expected MFU (A100):   28-33%
 ```
 
-### Team (arch_team.py)
+### Team (full_team_124m.py)
 ```
 Architecture Name:     12L-12H-768D-RoPE-RMS-SwiGLU-PreNorm
 Same as LLaMA
 ```
 
-### Hybrid (arch_custom.py - depends on your config)
+### Hybrid (full_custom.py - depends on your config)
 ```
 Architecture Name:     Varies based on components chosen
 FLOPs per token:       Varies (28-36 GF range)
@@ -465,26 +465,26 @@ FLOPs per token:       Varies (28-36 GF range)
 
 # ===== Basic Tests =====
 python test_imports.py                                    # Verify imports
-python train.py config/arch_gpt2.py --max_iters=50       # Quick test
+python train.py config/full_gpt2_124m.py --max_iters=50       # Quick test
 
 # ===== Architecture Tests =====
-python train.py config/arch_gpt2.py --max_iters=100      # GPT-2
-python train.py config/arch_llama.py --max_iters=100     # LLaMA
-python train.py config/arch_team.py --max_iters=100      # Team
-python train.py config/arch_custom.py --max_iters=100    # Custom
+python train.py config/full_gpt2_124m.py --max_iters=100      # GPT-2
+python train.py config/full_llama_124m.py --max_iters=100     # LLaMA
+python train.py config/full_team_124m.py --max_iters=100      # Team
+python train.py config/full_custom.py --max_iters=100    # Custom
 
 # ===== Override Tests =====
-python train.py config/arch_gpt2.py --position_encoding=rope            # Single override
-python train.py config/arch_gpt2.py --normalization=rmsnorm --ffn_type=swiglu  # Multiple
+python train.py config/full_gpt2_124m.py --position_encoding=rope            # Single override
+python train.py config/full_gpt2_124m.py --normalization=rmsnorm --ffn_type=swiglu  # Multiple
 
 # ===== Comparison =====
 python compare_architectures.py                          # All runs
 python compare_architectures.py --latest 5               # Latest 5
 
 # ===== Multi-GPU =====
-torchrun --standalone --nproc_per_node=4 train.py config/arch_llama.py              # DDP
-torchrun --standalone --nproc_per_node=4 train.py config/arch_gpt2.py --use_zero1=True   # ZeRO-1
-torchrun --standalone --nproc_per_node=4 train.py config/arch_llama.py --use_fsdp=True   # FSDP
+torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py              # DDP
+torchrun --standalone --nproc_per_node=4 train.py config/full_gpt2_124m.py --use_zero1=True   # ZeRO-1
+torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py --use_fsdp=True   # FSDP
 
 # ===== Utilities =====
 python -c "from model_config import list_presets; list_presets()"    # List presets
@@ -514,14 +514,14 @@ python prepare.py
 cd ../..
 
 # Try again
-python train.py config/arch_gpt2.py --max_iters=50 --dataset=shakespeare
+python train.py config/full_gpt2_124m.py --max_iters=50 --dataset=shakespeare
 ```
 
 ### Architecture Name Not Showing
 ```bash
 # Make sure using new config format (arch_*.py)
-python train.py config/arch_gpt2.py  # ✓ Shows architecture
-python train.py config/train_gpt2.py # ✗ Legacy format (still works but no arch name)
+python train.py config/full_gpt2_124m.py  # ✓ Shows architecture
+python train.py config/preset_gpt2_owt.py # ✗ Legacy format (still works but no arch name)
 ```
 
 ### FLOPs/Token Seems Wrong
@@ -605,6 +605,6 @@ System is working correctly if:
 **Recommended first test:**
 ```bash
 cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
-python test_imports.py && python train.py config/arch_gpt2.py --max_iters=50 --compile=False
+python test_imports.py && python train.py config/full_gpt2_124m.py --max_iters=50 --compile=False
 ```
 

@@ -488,25 +488,25 @@ logger.log_iter_detailed(
 
 ```bash
 # Single GPU - Test different architectures
-python train.py config/arch_gpt2.py        # GPT-2 architecture
-python train.py config/arch_llama.py       # LLaMA architecture
+python train.py config/full_gpt2_124m.py        # GPT-2 architecture
+python train.py config/full_llama_124m.py       # LLaMA architecture
 python train.py config/arch_team.py        # Team's model_v1
-python train.py config/arch_custom.py      # Your custom mix
+python train.py config/full_custom.py      # Your custom mix
 
 # Override architecture on command line
-python train.py config/arch_gpt2.py --normalization=rmsnorm --position_encoding=rope
+python train.py config/full_gpt2_124m.py --normalization=rmsnorm --position_encoding=rope
 
 # Multi-GPU DDP (4 GPUs)
-torchrun --standalone --nproc_per_node=4 train.py config/arch_llama.py
+torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py
 
 # Multi-GPU with ZeRO-1 (50% memory reduction)
-torchrun --standalone --nproc_per_node=4 train.py config/arch_gpt2.py --use_zero1=True
+torchrun --standalone --nproc_per_node=4 train.py config/full_gpt2_124m.py --use_zero1=True
 
 # Multi-GPU with FSDP (75% memory reduction)
-torchrun --standalone --nproc_per_node=4 train.py config/arch_llama.py --use_fsdp=True
+torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py --use_fsdp=True
 
 # HGX B200 (8 GPUs, future)
-torchrun --standalone --nproc_per_node=8 train.py config/arch_llama.py --use_fsdp=True
+torchrun --standalone --nproc_per_node=8 train.py config/full_llama_124m.py --use_fsdp=True
 ```
 
 ### Key Configuration Flags
@@ -626,7 +626,7 @@ POSITION_ENCODING_REGISTRY['alibi'] = ALiBiPositionEncoding
 
 **Step 3:** Use in config
 ```python
-# config/arch_custom.py
+# config/full_custom.py
 position_encoding = 'alibi'
 ```
 
