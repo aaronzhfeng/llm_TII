@@ -233,7 +233,10 @@ enhanced_training_system/llama3_tokenizer/
 enhanced_training_system/qwen3_tokenizer/
 
 # Training results and plots
-enhanced_training_system/saves/
 
 # Experimental/scratch work
 scaling_law_ml/
+
+# Misplaced dataset directories (should be in enhanced_training_system/data/)
+system_implementation/nanoGPT/data/slimpajama_627b_llama3/
+system_implementation/nanoGPT/data/slimpajama_6b_qwen3/
