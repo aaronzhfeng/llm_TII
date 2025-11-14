@@ -380,9 +380,23 @@ class GPT(nn.Module):
         # Total forward pass FLOPs
         forward_flops_per_token = L * flops_per_layer / S  # Per token
         
-        # Training FLOPs (forward + backward)
-        # Backward ≈ 2× forward (from Epoch AI research)
-        training_flops_per_token = 3 * forward_flops_per_token
+        # ===== MFU CALCULATION (PaLM Appendix B) =====
+        # Use PaLM's standard MFU denominator: 6N + 12LHQT (GFLOPs per token)
+        # Reference: PaLM paper (Chowdhery et al., 2022), Appendix B
+        
+        # Get non-embedding parameter count
+        N_params = self.get_parameter_number(non_embedding=True)
+        N_billion = N_params / 1e9
+        
+        # PaLM formula components
+        Q = H // a  # head dimension
+        T = S       # sequence length
+        
+        non_attn_flops = 6.0 * N_billion  # GFLOPs/token
+        attn_flops = 12.0 * L * a * Q * T / 1e9  # GFLOPs/token
+        
+        # Total training FLOPs per token (PaLM MFU denominator)
+        training_flops_per_token = (non_attn_flops + attn_flops) * 1e9  # Convert back to FLOPs
         
         # Total FLOPs for this iteration
         tokens_per_iter = S * fwdbwd_per_iter
@@ -395,10 +409,11 @@ class GPT(nn.Module):
         # Hardware peak FLOPs (configurable with B200 support)
         hardware_specs = {
             'cuda': {
-                'A100': {'bf16': 312e12, 'fp16': 312e12, 'fp32': 19.5e12},
-                'H100': {'bf16': 989e12, 'fp16': 989e12, 'fp32': 67e12},
-                'H200': {'bf16': 1979e12, 'fp16': 1979e12, 'fp32': 67e12},
                 'B200': {'bf16': 4500e12, 'fp16': 4500e12, 'fp32': 90e12},  # B200 specs
+                'H200': {'bf16': 1979e12, 'fp16': 1979e12, 'fp32': 67e12},
+                'H100': {'bf16': 989e12, 'fp16': 989e12, 'fp32': 67e12},
+                'A100': {'bf16': 312e12, 'fp16': 312e12, 'fp32': 19.5e12},
+                'A6000': {'bf16': 155.0e12, 'fp16': 155.0e12, 'fp32': 38.7e12},  # Dense FP16; datasheet shows 309.7 TF with 2:4 sparsity
                 'V100': {'bf16': 125e12, 'fp16': 125e12, 'fp32': 15.7e12},
             }
         }
@@ -413,10 +428,12 @@ class GPT(nn.Module):
                 gpu_name = 'H200'
             elif 'H100' in gpu_name_full:
                 gpu_name = 'H100'
-            elif 'V100' in gpu_name_full:
-                gpu_name = 'V100'
+            elif 'A6000' in gpu_name_full:
+                gpu_name = 'A6000'
             elif 'A100' in gpu_name_full:
                 gpu_name = 'A100'
+            elif 'V100' in gpu_name_full:
+                gpu_name = 'V100'
         
         # Get precision
         dtype = str(self.transformer.wte.weight.dtype).split('.')[-1]

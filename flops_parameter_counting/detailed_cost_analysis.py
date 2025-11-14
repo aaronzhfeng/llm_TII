@@ -332,23 +332,29 @@ def calculate_llama_parameters(config):
 def calculate_llama_flops_detailed(config, sequence_length=2048, batch_size=1):
     """
     Calculate FLOPs for LLaMA-style model using detailed academic formula.
+    
+    Supports both Multi-Head Attention (MHA) and Grouped Query Attention (GQA).
 
-    Formula per layer (forward pass):
+    Formula per layer (forward pass) for MHA:
     FLOPs = 12SBH² + 2aS²BH
+
+    Formula per layer (forward pass) for GQA:
+    FLOPs = 2SBH² (Q proj) + 4SBH×(n_kv×head_dim) (K,V proj) + 2SBH² (O proj) + 2aS²BH
 
     Where:
     - S = sequence_length
     - B = batch_size (1 for inference, >1 for training)
     - H = hidden_size
-    - a = num_attention_heads
+    - a = num_attention_heads (or num_kv_heads for GQA)
+    - n_kv = num_key_value_heads (for GQA)
 
     Breaking down:
-    - Attention QKV projections: 6SBH²
+    - Attention QKV projections: 6SBH² (MHA) or less for GQA
     - Attention scores (QK^T): aS²BH
     - Attention output (attn × V): aS²BH
     - Attention output projection: 2SBH²
-    - FFN up projection: 2SBH×d_ff (assuming d_ff=4H: 8SBH²)
-    - FFN down projection: 2SB×d_ff×H (assuming d_ff=4H: 8SBH²)
+    - FFN up projection: 2SBH×d_ff
+    - FFN down projection: 2SB×d_ff×H
 
     Reference: "Analysis of Transformer Model" - Insu Jang (2022)
     https://insujang.github.io/2022-07-30/analysis-of-transformer-model/
@@ -361,10 +367,25 @@ def calculate_llama_flops_detailed(config, sequence_length=2048, batch_size=1):
     S = sequence_length
     B = batch_size
     a = config['num_attention_heads']
+    
+    # Check if model uses Grouped Query Attention (GQA)
+    num_kv_heads = config.get('num_key_value_heads', config['num_attention_heads'])
+    num_q_heads = config['num_attention_heads']
 
     # Forward pass FLOPs per layer
     # Reference: Insu Jang's detailed analysis
-    attention_qkv_flops = 6 * S * B * H * H  # 3 projections × 2SBH²
+    if num_kv_heads == num_q_heads:
+        # Standard Multi-Head Attention (MHA)
+        attention_qkv_flops = 6 * S * B * H * H  # 3 projections × 2SBH²
+    else:
+        # Grouped Query Attention (GQA)
+        # Q projection: full size
+        attention_q_flops = 2 * S * B * H * H
+        # K, V projections: smaller (num_kv_heads instead of num_q_heads)
+        head_dim = H // num_q_heads
+        attention_kv_flops = 2 * 2 * S * B * H * (num_kv_heads * head_dim)  # K and V
+        attention_qkv_flops = attention_q_flops + attention_kv_flops
+    
     attention_scores_flops = a * S * S * B * H  # QK^T per head
     attention_output_flops = a * S * S * B * H  # Attention @ V per head
     attention_proj_flops = 2 * S * B * H * H  # Output projection
@@ -1508,6 +1529,208 @@ def validate_calculations():
     print("=" * 80)
 
 
+def grid_search_optimal_nd(
+    target_flops: float = 1.0e21,
+    sequence_length: int = 2048,
+    vocab_size: int = 128256,  # LLaMA 3 default
+    hidden_sizes=None,
+    num_layers_range=None,
+    head_dims=(64, 128),
+    use_gqa: bool = True,  # LLaMA 3 uses GQA
+    num_kv_heads: int = 8,  # LLaMA 3 default
+    tokens_min: float = 1e9,
+    tokens_max: float = 1e12,
+    tokens_samples: int = 100,
+    tolerance_frac: float = 0.02,
+    scaling_law_params=None,
+    enforce_chinchilla_ratio: bool = False,  # NEW: optional constraint
+    chinchilla_ratio_tolerance: float = 0.5,  # ±50% of D=20N
+    tie_word_embeddings: bool = False,
+    ffn_expansion_ratio: float = 3.5,  # LLaMA 3 uses 3.5×
+    top_k: int = 20
+):
+    """
+    Backward N-D grid search: Find optimal (N, D) for given compute budget.
+    
+    This extends the notebook approaches with:
+    1. GQA support (for LLaMA 3)
+    2. Optional D=20N constraint
+    3. Detailed FLOPs formula (not 6ND)
+    4. Custom scaling law parameters
+    5. Multiple FFN expansion ratios
+    
+    Args:
+        target_flops: Total compute budget (C) in FLOPs
+        sequence_length: Training sequence length
+        vocab_size: Tokenizer vocabulary size (128256 for LLaMA 3)
+        hidden_sizes: Hidden dimension candidates (None = auto-generate)
+        num_layers_range: Number of layers to try (None = auto-generate)
+        head_dims: Per-head dimensions (64 or 128)
+        use_gqa: Use Grouped Query Attention (LLaMA 3 style)
+        num_kv_heads: Number of KV heads for GQA
+        tokens_min/max: Token range to search
+        tokens_samples: Number of D values to try per config
+        tolerance_frac: How close to target_flops (2% default)
+        scaling_law_params: Custom {A, B, alpha, beta, E} or use Chinchilla
+        enforce_chinchilla_ratio: If True, constrain D to be near 20N
+        chinchilla_ratio_tolerance: Allows D in [10N, 30N] if tolerance=0.5
+        tie_word_embeddings: Share input/output embeddings
+        ffn_expansion_ratio: FFN expansion ratio (3.5 for LLaMA 3, 8/3 for LLaMA 2)
+        top_k: Return top-k best configs
+        
+    Returns:
+        {
+            'best': {...},  # Single best config
+            'leaderboard': [...],  # Top-k configs
+            'search_stats': {...}  # Search diagnostics
+        }
+    """
+    import numpy as np
+    
+    if scaling_law_params is None:
+        # Chinchilla default
+        scaling_law_params = {
+            'A': 406.4, 'B': 410.7,
+            'alpha': 0.34, 'beta': 0.28, 'E': 1.69
+        }
+    
+    # Auto-generate search ranges if not provided
+    if hidden_sizes is None:
+        hidden_sizes = list(range(1024, 8192, 256))
+    if num_layers_range is None:
+        num_layers_range = list(range(16, 64, 2))
+    
+    results = []
+    configs_tried = 0
+    configs_passed_flops = 0
+    configs_passed_chinchilla = 0
+    
+    # Generate token candidates
+    D_candidates = np.linspace(tokens_min, tokens_max, tokens_samples, dtype=np.int64)
+    
+    for H in hidden_sizes:
+        for L in num_layers_range:
+            for head_dim in head_dims:
+                # Calculate number of attention heads
+                if H % head_dim != 0:
+                    continue  # Skip if not divisible
+                
+                num_heads = H // head_dim
+                
+                # Calculate FFN dimension
+                D_ff = int(ffn_expansion_ratio * H)
+                # Round to multiple of 256 for kernel efficiency
+                D_ff = (D_ff // 256) * 256
+                
+                # Build config
+                config = {
+                    'hidden_size': H,
+                    'intermediate_size': D_ff,
+                    'num_hidden_layers': L,
+                    'num_attention_heads': num_heads,
+                    'vocab_size': vocab_size,
+                    'tie_word_embeddings': tie_word_embeddings,
+                    'max_position_embeddings': sequence_length
+                }
+                
+                if use_gqa:
+                    # LLaMA 3 style: Grouped Query Attention
+                    # Ensure num_heads is divisible by num_kv_heads
+                    if num_heads % num_kv_heads != 0:
+                        continue
+                    config['num_key_value_heads'] = num_kv_heads
+                
+                # Calculate N (parameters)
+                N = calculate_llama_parameters(config)
+                
+                # Calculate FLOPs per token (using detailed formula)
+                forward_flops_per_seq = calculate_llama_flops_detailed(
+                    config, sequence_length, batch_size=1
+                )
+                forward_flops_per_token = forward_flops_per_seq / sequence_length
+                training_flops_per_token = 3 * forward_flops_per_token  # 1F + 2B
+                
+                configs_tried += 1
+                
+                # For each D candidate, check if it matches target_flops
+                for D in D_candidates:
+                    # Chinchilla constraint check (optional)
+                    if enforce_chinchilla_ratio:
+                        chinchilla_optimal = 20 * N
+                        ratio = D / chinchilla_optimal
+                        # Allow ±tolerance (0.5 = 50% deviation)
+                        if not ((1 - chinchilla_ratio_tolerance) <= ratio <= 
+                                (1 + chinchilla_ratio_tolerance)):
+                            continue
+                        configs_passed_chinchilla += 1
+                    
+                    # Compute total FLOPs
+                    C = training_flops_per_token * D
+                    
+                    # Check if within tolerance
+                    rel_error = abs(C - target_flops) / target_flops
+                    if rel_error > tolerance_frac:
+                        continue
+                    
+                    configs_passed_flops += 1
+                    
+                    # Calculate scaling law loss
+                    loss = (scaling_law_params['A'] * (N ** -scaling_law_params['alpha']) +
+                           scaling_law_params['B'] * (D ** -scaling_law_params['beta']) +
+                           scaling_law_params['E'])
+                    
+                    # Store result
+                    results.append({
+                        'hidden_size': H,
+                        'num_layers': L,
+                        'num_heads': num_heads,
+                        'head_dim': head_dim,
+                        'num_kv_heads': config.get('num_key_value_heads', num_heads),
+                        'intermediate_size': D_ff,
+                        'ffn_expansion': D_ff / H,
+                        'vocab_size': vocab_size,
+                        'sequence_length': sequence_length,
+                        'N_params': float(N),
+                        'D_tokens': float(D),
+                        'C_flops': float(C),
+                        'C_target': float(target_flops),
+                        'rel_error': float(rel_error),
+                        'flops_per_token': float(training_flops_per_token),
+                        'loss': float(loss),
+                        'chinchilla_ratio': float(D / (20 * N)),
+                        'use_gqa': use_gqa
+                    })
+    
+    if not results:
+        return {
+            'best': None,
+            'leaderboard': [],
+            'search_stats': {
+                'configs_tried': configs_tried,
+                'configs_passed_flops': configs_passed_flops,
+                'configs_passed_chinchilla': configs_passed_chinchilla,
+                'note': 'No configs found. Try wider search ranges or looser tolerance.'
+            }
+        }
+    
+    # Sort by loss (ascending)
+    results.sort(key=lambda x: (x['loss'], x['rel_error']))
+    
+    best = results[0]
+    leaderboard = results[:top_k]
+    
+    return {
+        'best': best,
+        'leaderboard': leaderboard,
+        'search_stats': {
+            'configs_tried': configs_tried,
+            'configs_passed_flops': configs_passed_flops,
+            'configs_passed_chinchilla': configs_passed_chinchilla,
+            'total_candidates': len(results)
+        }
+    }
+
+
 def resolve_config_path(config_path, config_type='model'):
     """
     Resolve config path with support for new organized directory structure.
@@ -1573,6 +1796,15 @@ Examples:
   python detailed_cost_analysis.py --backward_config verify_llama_1.36b.jsonc
   python detailed_cost_analysis.py --backward_config configs/scaling_laws/hoffmann/backward_scaling_config.jsonc
   
+  # Grid search for optimal (N, D) - LLaMA 3 with GQA (default)
+  python detailed_cost_analysis.py --grid_search 1.36e21
+  
+  # Grid search with Chinchilla constraint (D ≈ 20N ± 50%)
+  python detailed_cost_analysis.py --grid_search 1.36e21 --enforce_chinchilla
+  
+  # Grid search using MHA instead of GQA
+  python detailed_cost_analysis.py --grid_search 1.36e21 --no_gqa
+  
   # Validation
   python detailed_cost_analysis.py --validate
 
@@ -1584,6 +1816,12 @@ Note: Configs can be specified with just filename if in configs/models/ or confi
                         help='Path to model architecture config file (for forward analysis)')
     parser.add_argument('--backward_config', type=str, 
                         help='Path to backward scaling config file (for backward analysis)')
+    parser.add_argument('--grid_search', type=float,
+                        help='Perform backward N-D grid search for given compute budget (FLOPs)')
+    parser.add_argument('--enforce_chinchilla', action='store_true',
+                        help='Enforce D ≈ 20N constraint in grid search')
+    parser.add_argument('--no_gqa', action='store_true',
+                        help='Disable GQA (use MHA) in grid search')
     parser.add_argument('--validate', action='store_true', 
                         help='Run validation tests')
     args = parser.parse_args()
@@ -1591,7 +1829,57 @@ Note: Configs can be specified with just filename if in configs/models/ or confi
     if args.validate:
         validate_calculations()
 
-    if args.backward_config:
+    if args.grid_search:
+        print("\n" + "=" * 80)
+        print("BACKWARD N-D GRID SEARCH: Finding optimal (N, D) for compute budget")
+        print("=" * 80)
+        print(f"Target compute: {args.grid_search:.2e} FLOPs\n")
+        
+        results = grid_search_optimal_nd(
+            target_flops=args.grid_search,
+            enforce_chinchilla_ratio=args.enforce_chinchilla,
+            use_gqa=not args.no_gqa
+        )
+        
+        best = results['best']
+        if best is None:
+            print(results['search_stats']['note'])
+        else:
+            print("BEST CONFIG:")
+            print(f"  Loss: {best['loss']:.6f}")
+            print(f"  N (params): {best['N_params']/1e9:.3f}B")
+            print(f"  D (tokens): {best['D_tokens']/1e9:.3f}B")
+            print(f"  C (FLOPs): {best['C_flops']:.2e} (error: {best['rel_error']:.2%})")
+            print(f"  Architecture: {best['num_layers']}L × {best['hidden_size']}H × "
+                  f"{best['num_heads']}A (head_dim={best['head_dim']})")
+            print(f"  FFN: {best['intermediate_size']} ({best['ffn_expansion']:.2f}× expansion)")
+            print(f"  D/N ratio: {best['chinchilla_ratio']:.1f} (Chinchilla: 20.0)")
+            if best['use_gqa']:
+                print(f"  GQA: {best['num_kv_heads']} KV heads ({best['num_heads']//best['num_kv_heads']}:1 Q:KV ratio)")
+            
+            print("\n" + "=" * 80)
+            print("TOP 10 CANDIDATES:")
+            print("=" * 80)
+            print(f"{'Rank':>4} {'Loss':>10} {'N(B)':>8} {'D(B)':>8} {'L':>3} {'H':>5} "
+                  f"{'A':>3} {'D/N':>6} {'GQA':>4}")
+            print("-" * 80)
+            for i, r in enumerate(results['leaderboard'][:10], 1):
+                gqa_str = f"{r['num_kv_heads']}" if r['use_gqa'] else "MHA"
+                print(f"{i:4d} {r['loss']:10.6f} {r['N_params']/1e9:8.3f} "
+                      f"{r['D_tokens']/1e9:8.3f} {r['num_layers']:3d} "
+                      f"{r['hidden_size']:5d} {r['num_heads']:3d} "
+                      f"{r['chinchilla_ratio']:6.1f} {gqa_str:>4}")
+            
+            print("\nSearch statistics:")
+            stats = results['search_stats']
+            print(f"  Configs tried: {stats['configs_tried']:,}")
+            print(f"  Passed FLOPs filter: {stats['configs_passed_flops']:,}")
+            if args.enforce_chinchilla:
+                print(f"  Passed Chinchilla filter: {stats['configs_passed_chinchilla']:,}")
+            print(f"  Total candidates: {stats['total_candidates']:,}")
+            print("=" * 80)
+
+    elif args.backward_config:
         # Resolve path for backward config
         resolved_path = resolve_config_path(args.backward_config, config_type='scaling_law')
         print(f"Using config: {resolved_path}\n")

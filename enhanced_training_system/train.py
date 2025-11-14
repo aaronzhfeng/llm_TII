@@ -36,6 +36,7 @@ import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.distributed.optim import ZeroRedundancyOptimizer
+from tqdm import tqdm
 
 # FSDP imports
 from torch.distributed.fsdp import (
@@ -80,6 +81,7 @@ eval_interval = 2000
 log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
+eval_at_start = True # if True, run evaluation before first training iteration
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # logging
@@ -111,6 +113,8 @@ norm_position = 'post'              # 'pre', 'post'
 ffn_type = 'standard'               # 'standard', 'swiglu'
 weight_tying = True                 # True/False - tie token embeddings with lm_head
 rope_theta = 10000.0                # RoPE theta parameter (if using RoPE)
+d_ff = 0                            # FFN dimension (0 = auto-calculate, >0 = explicit)
+intermediate_size = 0               # Alias for d_ff (0 = auto-calculate)
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -219,6 +223,25 @@ if MODULAR_ARCH_AVAILABLE and arch_preset != 'legacy':
         arch_config.dropout = dropout
         arch_config.bias = bias
         arch_config.vocab_size = meta_vocab_size if meta_vocab_size is not None else 50304
+        
+        # Override num_key_value_heads if specified in config, otherwise reset to n_head for MHA
+        if 'num_key_value_heads' in config and config['num_key_value_heads'] is not None:
+            arch_config.num_key_value_heads = config['num_key_value_heads']
+        else:
+            # Reset to n_head to match the new head count (for MHA)
+            arch_config.num_key_value_heads = n_head
+        
+        # Override d_ff if specified in config, otherwise recalculate based on new n_embd
+        if 'd_ff' in config and config['d_ff'] is not None and config['d_ff'] > 0:
+            arch_config.d_ff = config['d_ff']
+        elif 'intermediate_size' in config and config['intermediate_size'] is not None and config['intermediate_size'] > 0:
+            arch_config.d_ff = config['intermediate_size']
+        else:
+            # Recalculate d_ff based on new n_embd and ffn_type
+            if arch_config.ffn_type == 'swiglu':
+                arch_config.d_ff = int(8 * n_embd / 3)
+            else:
+                arch_config.d_ff = 4 * n_embd
     else:
         print("Building custom architecture from config")
         arch_config = ModelArchitectureConfig(
@@ -591,6 +614,14 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 running_mfu = -1.0
 
+# Create progress bar (only on master process)
+if master_process:
+    pbar = tqdm(total=max_iters, initial=iter_num, desc="Training", 
+                unit="iter", dynamic_ncols=True, 
+                bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]')
+else:
+    pbar = None
+
 while True:
 
     # determine and set the learning rate for this iteration
@@ -599,7 +630,12 @@ while True:
         param_group['lr'] = lr
 
     # evaluate the loss on train/val sets and write checkpoints
-    if iter_num % eval_interval == 0:
+    should_eval = iter_num % eval_interval == 0
+    # Skip initial evaluation if eval_at_start is False (unless eval_only mode)
+    if iter_num == 0 and not eval_at_start and not eval_only:
+        should_eval = False
+    
+    if should_eval:
         # All ranks must run evaluation to keep FSDP synchronized
         losses = estimate_loss()
         
@@ -737,10 +773,15 @@ while True:
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
+    
+    # Get loss for progress bar (always compute on master for tqdm)
+    lossf = None
+    if master_process:
+        lossf = loss.item() * gradient_accumulation_steps
+    
     if iter_num % log_interval == 0 and master_process:
         # get loss as float. note: this is a CPU-GPU sync point
         # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
-        lossf = loss.item() * gradient_accumulation_steps
         
         if local_iter_num >= 5: # let the training loop settle a bit
             # Get detailed MFU breakdown
@@ -765,12 +806,13 @@ while True:
             print(f"📍 Iter {iter_num:>6d} │ Loss: {lossf:.4f} │ Time: {dt*1000:.0f}ms │ LR: {lr:.2e}")
             print(f"{'─'*80}")
             
-            # MFU breakdown
+            # MFU breakdown (PaLM formula)
             print(f"⚡ MFU: {mfu_breakdown['mfu_percent']:.2f}% │ "
                   f"Achieved: {mfu_breakdown['achieved_tflops']:.1f} TF │ "
                   f"Peak: {mfu_breakdown['hardware_peak_tflops']:.1f} TF")
             print(f"   Tokens/s: {mfu_breakdown['tokens_per_sec']:.0f} │ "
-                  f"FLOPs/token: {mfu_breakdown['flops_per_token']/1e9:.1f} GF")
+                  f"FLOPs/token: {mfu_breakdown['flops_per_token']/1e9:.2f} GF "
+                  f"(6N+12LHQT: N={mfu_breakdown.get('model_params_billion', 0):.3f}B)")
             
             # Memory
             if memory_stats:
@@ -798,10 +840,24 @@ while True:
     
     iter_num += 1
     local_iter_num += 1
+    
+    # Update progress bar
+    if pbar is not None:
+        pbar.update(1)
+        if lossf is not None and local_iter_num >= 5:
+            # Update postfix with current metrics
+            postfix = {'loss': f'{lossf:.4f}'}
+            if running_mfu > 0:
+                postfix['mfu'] = f'{running_mfu*100:.1f}%'
+            pbar.set_postfix(postfix)
 
     # termination conditions
     if iter_num > max_iters:
         break
+
+# Close progress bar
+if pbar is not None:
+    pbar.close()
 
 # Finalize and save JSON log
 if json_logger and master_process:

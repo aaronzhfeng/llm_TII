@@ -5,9 +5,13 @@
 torch>=2.0.0              # PyTorch 2.0+ required for torch.compile and SDPA
 numpy>=1.20.0
 tiktoken>=0.5.0          # BPE tokenizer
+tqdm>=4.65.0             # Progress bars
 
 # Optional but Recommended
 transformers>=4.30.0     # For loading pretrained GPT-2 weights
+sentencepiece>=0.1.99    # Required for LlamaTokenizer
+protobuf>=3.20.0         # Required by sentencepiece
+hf_transfer>=0.1.0       # Fast downloads from HuggingFace Hub
 wandb>=0.15.0           # For experiment tracking (optional)
 
 # For Data Processing
@@ -31,10 +35,10 @@ flake8>=6.0.0          # Linting
 #   * NCCL backend (included with CUDA PyTorch)
 #   * InfiniBand recommended for multi-node
 #
-# - Optional: Triton for custom kernels (Linux + CUDA only)
-#   pip install triton
+# - Triton is included with PyTorch 2.x (for kernel compilation)
 #
-# - Optional: flash-attn package for FlashAttention-2
+# - RECOMMENDED: flash-attn package for FlashAttention-2 (~2x speedup)
 #   pip install flash-attn --no-build-isolation
 #   (Requires CUDA, may need build tools)
+#   Already installed in this environment!
 

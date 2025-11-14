@@ -33,7 +33,11 @@ from model_components import (
 class ConfigurableAttention(nn.Module):
     """
     Fully configurable causal self-attention.
-    Supports: SDPA (FlashAttention), manual attention, RoPE integration
+    Supports: SDPA (FlashAttention), manual attention, RoPE integration, GQA
+    
+    Features:
+    - Multi-Head Attention (MHA): num_key_value_heads == n_head
+    - Grouped Query Attention (GQA): num_key_value_heads < n_head (LLaMA 3)
     """
     
     def __init__(self, config: ModelArchitectureConfig):
@@ -47,8 +51,18 @@ class ConfigurableAttention(nn.Module):
         self.attention_backend = config.attention_backend
         self.position_encoding_type = config.position_encoding
         
-        # Q, K, V projections (combined for efficiency)
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        # GQA configuration
+        self.n_kv_head = config.num_key_value_heads
+        self.use_gqa = self.n_kv_head < self.n_head
+        self.n_rep = self.n_head // self.n_kv_head  # How many Q heads per KV head
+        
+        if self.use_gqa:
+            # Grouped Query Attention: separate Q and KV projections
+            self.c_q = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+            self.c_kv = nn.Linear(config.n_embd, 2 * self.n_kv_head * self.d_k, bias=config.bias)
+        else:
+            # Multi-Head Attention: combined QKV projection
+            self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         
         # Output projection
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
@@ -57,9 +71,18 @@ class ConfigurableAttention(nn.Module):
         self.attn_dropout = nn.Dropout(config.attention_dropout)
         self.resid_dropout = nn.Dropout(config.residual_dropout)
         
-        # Check SDPA availability
+        # Check SDPA availability (supports both 'sdpa' and 'flash_attn_2' backends)
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        if not self.flash and config.attention_backend == 'sdpa':
+        
+        # Normalize flash_attn_2 to sdpa (both use PyTorch's SDPA which dispatches to FlashAttention)
+        if config.attention_backend == 'flash_attn_2':
+            if not self.flash:
+                print("WARNING: PyTorch SDPA/FlashAttention not available (requires PyTorch 2.0+), using manual attention")
+                self.attention_backend = 'manual'
+            else:
+                # flash_attn_2 uses PyTorch's SDPA backend
+                self.attention_backend = 'sdpa'
+        elif config.attention_backend == 'sdpa' and not self.flash:
             print("WARNING: PyTorch SDPA not available (requires PyTorch 2.0+), using manual attention")
             self.attention_backend = 'manual'
         
@@ -88,13 +111,31 @@ class ConfigurableAttention(nn.Module):
         """
         B, T, C = x.size()
         
-        # QKV projections
-        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
-        
-        # Reshape to multi-head format: [B, H, T, d_k]
-        k = k.view(B, T, self.n_head, self.d_k).transpose(1, 2)
-        q = q.view(B, T, self.n_head, self.d_k).transpose(1, 2)
-        v = v.view(B, T, self.n_head, self.d_k).transpose(1, 2)
+        if self.use_gqa:
+            # Grouped Query Attention: separate Q and KV projections
+            q = self.c_q(x)  # [B, T, n_embd]
+            kv = self.c_kv(x)  # [B, T, 2 * n_kv_head * d_k]
+            
+            # Reshape Q: [B, T, n_head, d_k] -> [B, n_head, T, d_k]
+            q = q.view(B, T, self.n_head, self.d_k).transpose(1, 2)
+            
+            # Reshape KV: split into K and V
+            k, v = kv.split(self.n_kv_head * self.d_k, dim=2)
+            k = k.view(B, T, self.n_kv_head, self.d_k).transpose(1, 2)  # [B, n_kv_head, T, d_k]
+            v = v.view(B, T, self.n_kv_head, self.d_k).transpose(1, 2)  # [B, n_kv_head, T, d_k]
+            
+            # Repeat K and V for each group of Q heads
+            # From [B, n_kv_head, T, d_k] to [B, n_head, T, d_k]
+            k = k.repeat_interleave(self.n_rep, dim=1)
+            v = v.repeat_interleave(self.n_rep, dim=1)
+        else:
+            # Multi-Head Attention: combined QKV projection
+            q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+            
+            # Reshape to multi-head format: [B, H, T, d_k]
+            q = q.view(B, T, self.n_head, self.d_k).transpose(1, 2)
+            k = k.view(B, T, self.n_head, self.d_k).transpose(1, 2)
+            v = v.view(B, T, self.n_head, self.d_k).transpose(1, 2)
         
         # Apply RoPE if configured
         if self.rope is not None and token_positions is not None:
@@ -380,10 +421,27 @@ class ConfigurableGPT(nn.Module):
         # Per-token FLOPs
         forward_flops_per_token = total_forward_flops / S
         
-        # ===== TRAINING FLOPs (Forward + Backward) =====
-        # Backward ≈ 2× forward (from Epoch AI research)
-        # Reference: https://epoch.ai/blog/backward-forward-FLOP-ratio
-        training_flops_per_token = 3 * forward_flops_per_token
+        # ===== MFU CALCULATION (PaLM Appendix B) =====
+        # Use PaLM's standard MFU denominator: 6N + 12LHQT (GFLOPs per token)
+        # Where:
+        #   N = non-embedding trainable parameters (billions)
+        #   L = layers, H = heads, Q = head_dim, T = sequence length
+        #   FMA counted as 2 FLOPs; excludes rematerialization
+        # Reference: PaLM paper (Chowdhery et al., 2022), Appendix B
+        
+        # Get non-embedding parameter count
+        N_params = self.get_num_params(non_embedding=True)
+        N_billion = N_params / 1e9
+        
+        # PaLM formula components
+        Q = H // a  # head dimension
+        T = S       # sequence length
+        
+        non_attn_flops = 6.0 * N_billion  # GFLOPs/token for non-attention layers
+        attn_flops = 12.0 * L * a * Q * T / 1e9  # GFLOPs/token for attention
+        
+        # Total training FLOPs per token (PaLM MFU denominator)
+        training_flops_per_token = (non_attn_flops + attn_flops) * 1e9  # Convert back to FLOPs
         
         # Total FLOPs for this iteration
         tokens_per_iter = S * fwdbwd_per_iter
@@ -400,6 +458,7 @@ class ConfigurableGPT(nn.Module):
                 'H200': {'bf16': 1979e12, 'fp16': 1979e12, 'fp32': 67e12},
                 'H100': {'bf16': 989e12, 'fp16': 989e12, 'fp32': 67e12},
                 'A100': {'bf16': 312e12, 'fp16': 312e12, 'fp32': 19.5e12},
+                'A6000': {'bf16': 155.0e12, 'fp16': 155.0e12, 'fp32': 38.7e12},  # Dense FP16; datasheet shows 309.7 TF with 2:4 sparsity
                 'V100': {'bf16': 125e12, 'fp16': 125e12, 'fp32': 15.7e12},
             }
         }
@@ -408,7 +467,7 @@ class ConfigurableGPT(nn.Module):
         gpu_name = 'A100'  # Default
         if torch.cuda.is_available():
             gpu_name_full = torch.cuda.get_device_name(0)
-            for name in ['B200', 'H200', 'H100', 'A100', 'V100']:
+            for name in ['B200', 'H200', 'H100', 'A100', 'A6000', 'V100']:
                 if name in gpu_name_full:
                     gpu_name = name
                     break
@@ -436,6 +495,9 @@ class ConfigurableGPT(nn.Module):
             'gpu_name': gpu_name,
             'precision': precision_key,
             'num_gpus': num_gpus,
+            'model_params_billion': N_billion,
+            'non_attn_gflops': non_attn_flops,
+            'attn_gflops': attn_flops,
             'attention_flops_per_layer': attention_flops,
             'ffn_flops_per_layer': ffn_flops,
             'attention_to_ffn_ratio': attention_flops / ffn_flops if ffn_flops > 0 else 0,

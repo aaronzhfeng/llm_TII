@@ -55,6 +55,12 @@ class ModelArchitectureConfig:
     #   - 'sdpa': PyTorch SDPA (FlashAttention-1, standard, PyTorch >=2.0)
     #   - 'manual': Naive attention (slow, for debugging)
     
+    num_key_value_heads: Optional[int] = None  # For Grouped Query Attention (GQA)
+    # Options:
+    #   - None: Use Multi-Head Attention (MHA) - same as n_head
+    #   - < n_head: Use Grouped Query Attention (GQA) - LLaMA 3 style
+    #   - Example: n_head=32, num_key_value_heads=8 → 4:1 Q:KV ratio (LLaMA 3.1 8B)
+    
     # ========== POSITION ENCODING ==========
     position_encoding: Literal['learned_absolute', 'rope', 'none'] = 'learned_absolute'
     rope_theta: float = 10000.0         # RoPE base frequency (used if position_encoding='rope')
@@ -96,11 +102,20 @@ class ModelArchitectureConfig:
         if self.residual_dropout is None:
             self.residual_dropout = self.dropout
         
+        # Auto-set GQA: if None, use MHA (num_key_value_heads = n_head)
+        if self.num_key_value_heads is None:
+            self.num_key_value_heads = self.n_head  # Default to MHA
+        
         # Validation
         assert self.n_embd % self.n_head == 0, "n_embd must be divisible by n_head"
         assert self.norm_position in ['pre', 'post'], "norm_position must be 'pre' or 'post'"
         assert self.block_size > 0, "block_size must be positive"
         assert self.n_layer > 0, "n_layer must be positive"
+        
+        # GQA validation
+        assert self.num_key_value_heads <= self.n_head, "num_key_value_heads must be <= n_head"
+        assert self.n_head % self.num_key_value_heads == 0, \
+            f"n_head ({self.n_head}) must be divisible by num_key_value_heads ({self.num_key_value_heads})"
         
         # Informational warnings about unusual combinations
         if self.position_encoding == 'learned_absolute' and self.ffn_type == 'swiglu':
@@ -136,11 +151,16 @@ class ModelArchitectureConfig:
         """
         Generate descriptive architecture name.
         Example: '12L-12H-768D-RoPE-RMS-SwiGLU-PreNorm'
+        Example (GQA): '32L-32H-4096D-GQA8-RoPE-RMS-SwiGLU-PreNorm'
         """
         components = []
         
         # Size: Layers-Heads-Dimension
         components.append(f"{self.n_layer}L-{self.n_head}H-{self.n_embd}D")
+        
+        # GQA indicator
+        if self.num_key_value_heads < self.n_head:
+            components.append(f"GQA{self.num_key_value_heads}")
         
         # Position encoding
         if self.position_encoding == 'rope':
@@ -177,7 +197,7 @@ class ModelArchitectureConfig:
         Return human-readable architecture summary.
         Used in startup report.
         """
-        return {
+        summary = {
             'Architecture Name': self.get_architecture_name(),
             'Model Size': f"{self.n_layer}L × {self.n_head}H × {self.n_embd}D",
             'Parameters (est)': f"~{self._estimate_params()/1e6:.1f}M",
@@ -192,6 +212,15 @@ class ModelArchitectureConfig:
             'Weight Tying': 'Yes' if self.weight_tying else 'No',
             'Dropout': f'{self.dropout:.3f}',
         }
+        
+        # Add GQA info if using grouped query attention
+        if self.num_key_value_heads < self.n_head:
+            qkv_ratio = self.n_head // self.num_key_value_heads
+            summary['Attention Type'] = f'GQA ({self.num_key_value_heads} KV heads, {qkv_ratio}:1 Q:KV ratio)'
+        else:
+            summary['Attention Type'] = 'MHA (Multi-Head Attention)'
+        
+        return summary
     
     def _estimate_params(self):
         """Rough parameter estimate for reporting"""
@@ -203,8 +232,18 @@ class ModelArchitectureConfig:
             params += self.block_size * self.n_embd
         
         # Per-layer parameters
-        # Attention: Q, K, V, O projections (4 * n_embd * n_embd)
-        attn_params = 4 * self.n_embd * self.n_embd
+        # Attention: Q, K, V, O projections
+        head_dim = self.n_embd // self.n_head
+        
+        if self.num_key_value_heads < self.n_head:
+            # GQA: Q is full size, K and V are smaller
+            q_params = self.n_embd * self.n_embd  # Q projection
+            kv_params = 2 * self.n_embd * (self.num_key_value_heads * head_dim)  # K, V projections
+            o_params = self.n_embd * self.n_embd  # O projection
+            attn_params = q_params + kv_params + o_params
+        else:
+            # MHA: Q, K, V, O all full size
+            attn_params = 4 * self.n_embd * self.n_embd
         
         # FFN parameters
         if self.ffn_type == 'swiglu':
@@ -370,9 +409,59 @@ def get_team_config() -> ModelArchitectureConfig:
     )
 
 
+def get_llama3_style_config() -> ModelArchitectureConfig:
+    """
+    LLaMA 3 / LLaMA 3.1 architecture.
+    
+    Key differences from LLaMA 2:
+    - Grouped Query Attention (GQA): 8 KV heads for all model sizes
+    - FFN expansion: 3.5× (not 8/3 ≈ 2.67×) for better compute/parameter tradeoff
+    - Extended RoPE: theta=500000 for 128K context support
+    - Larger vocabulary: 128K tokens (tiktoken-based BPE)
+    
+    Architecture choices (same as LLaMA 2):
+    - RoPE (rotary position embeddings)
+    - RMSNorm
+    - SwiGLU activation
+    - Pre-norm
+    - No weight tying
+    - No bias
+    
+    Reference: LLaMA 3 Model Card
+    https://huggingface.co/meta-llama/Meta-Llama-3.1-8B
+    """
+    return ModelArchitectureConfig(
+        # Size (small default for testing, override in actual configs)
+        n_layer=12,
+        n_head=16,  # Changed from 12 to 16 for valid GQA ratio (16:8 = 2:1)
+        n_embd=1024,  # Adjusted to match n_head * 64 = 1024 (head_dim=64)
+        block_size=1024,
+        vocab_size=128256,  # LLaMA 3 tokenizer (128K vocab, rounded up)
+        
+        # Architecture (LLaMA 3 style)
+        normalization='rmsnorm',
+        activation='silu',  # Not used with SwiGLU, but document it
+        position_encoding='rope',
+        norm_position='pre',
+        ffn_type='swiglu',
+        attention_backend='sdpa',
+        
+        # LLaMA 3 specifics
+        num_key_value_heads=8,  # GQA: 8 KV heads (creates 16:8 = 2:1 Q:KV ratio)
+        rope_theta=500000.0,     # Extended from 10000 for long context
+        ffn_expansion_ratio=3.5,  # 3.5× expansion (LLaMA 3), not 8/3
+        
+        # Options
+        bias=False,
+        weight_tying=False,
+        dropout=0.0,
+    )
+
+
 PRESET_CONFIGS = {
     'gpt2': get_gpt2_config,
     'llama': get_llama_style_config,
+    'llama3': get_llama3_style_config,  # NEW: LLaMA 3 with GQA
     'hybrid': get_hybrid_config,
     'team': get_team_config,
 }
@@ -383,14 +472,15 @@ def get_preset_config(name: str) -> ModelArchitectureConfig:
     Get a preset configuration by name.
     
     Args:
-        name: Preset name ('gpt2', 'llama', 'hybrid', 'team')
+        name: Preset name ('gpt2', 'llama', 'llama3', 'hybrid', 'team')
     
     Returns:
         ModelArchitectureConfig instance
     
     Available presets:
     - 'gpt2': Standard GPT-2 124M architecture
-    - 'llama': LLaMA-style (RoPE + RMSNorm + SwiGLU)
+    - 'llama': LLaMA 2-style (RoPE + RMSNorm + SwiGLU + MHA)
+    - 'llama3': LLaMA 3-style (RoPE + RMSNorm + SwiGLU + GQA)
     - 'hybrid': Experimental (RoPE + LayerNorm + GELU)
     - 'team': Team's model_v1 architecture
     """
