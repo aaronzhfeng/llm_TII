@@ -1,0 +1,66 @@
+# Project-Specific Rules for AI Assistant
+# =========================================
+# These rules are automatically read by Cursor AI in this project.
+# Edit this file to customize AI behavior for this codebase.
+
+## Project Context
+# This is an LLM training system with:
+# - Modular transformer architecture (GPT-2, LLaMA 2, LLaMA 3)
+# - GQA (Grouped Query Attention) support
+# - Scaling law optimization
+# - Multi-GPU training (DDP, ZeRO-1, FSDP)
+
+## Code Style Preferences
+# - Python 3.12
+# - Use type hints where helpful
+# - Keep functions focused and modular
+# - Document complex algorithms
+
+## Documentation
+# - All numbered docs are in docs/ folder (01-24)
+# - Main guides in root: README.md, TRAINING_GUIDE.md, SYSTEM_OVERVIEW.md
+# - Latest work: LLaMA 3 optimal configs (docs/18-24)
+
+## Common Tasks
+# When working with configs:
+# - Config files are in config/ folder
+# - Use arch_preset for architecture selection ('gpt2', 'llama', 'llama3')
+# - GQA requires n_head % num_key_value_heads == 0
+
+# When debugging training:
+# - Check MFU calculation (model_builder.py)
+# - Memory issues: suggest FSDP or ZeRO-1
+# - Dataset issues: point to data/*/prepare.py
+
+## Testing
+# Quick smoke test: python train.py config/FILE.py --max_iters=10 --compile=False
+# Multi-GPU: torchrun --standalone --nproc_per_node=N train.py config/FILE.py
+
+## Custom Instructions
+# Add your specific preferences below:
+
+# Memory Management (from experience):
+# - 2.2B Chinchilla model: ~47GB on single GPU → OOM on A6000
+# - For single GPU testing: Use 1.5B optimal config instead
+# - 2.2B model REQUIRES multi-GPU (8× A100 minimum with FSDP)
+# - Always check model size before suggesting single GPU tests:
+#   - <1.5B: OK for single GPU
+#   - 1.5-2.0B: Tight on single GPU, may need --batch_size=2
+#   - >2.0B: Multi-GPU required
+
+# Testing workflow:
+# - Always suggest --max_iters=10 --compile=False for smoke tests
+# - Prefer modular solutions over monolithic functions
+# - When creating new configs, follow the pattern in config/full_llama3_*.py
+# - Check if dataset is prepared before running training commands
+
+# Model selection for hardware:
+# - Single A6000 (48GB): Use full_llama3_1.5b_optimal.py
+# - 8× A100 (80GB): Can use full_llama3_2.2b_chinchilla.py or full_llama3_8b.py
+# - For 2.2B+ models: Must use --use_fsdp=True
+
+# Common issues:
+# - OOM on single GPU → suggest smaller model or multi-GPU
+# - GQA ratio error → check n_head % num_key_value_heads == 0
+# - Dataset not found → point to data/slimpajama_6b_llama3/prepare.py
+

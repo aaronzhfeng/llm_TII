@@ -226,3 +226,14 @@ out-*/
 data/*/train.bin
 data/*/val.bin
 data/*/meta.pkl
+
+# Downloaded tokenizers (large model files)
+enhanced_training_system/llama2_tokenizer/
+enhanced_training_system/llama3_tokenizer/
+enhanced_training_system/qwen3_tokenizer/
+
+# Training results and plots
+enhanced_training_system/saves/
+
+# Experimental/scratch work
+scaling_law_ml/
