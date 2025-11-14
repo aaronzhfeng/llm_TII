@@ -25,8 +25,9 @@ This implementation supports **fully configurable architectures** - mix and matc
 
 **Supported Architectures:**
 - **GPT-2 Standard**: Learned pos + LayerNorm + GELU
-- **LLaMA-Style**: RoPE + RMSNorm + SwiGLU  
-- **Team model_v1**: Same as LLaMA
+- **LLaMA 2**: RoPE + RMSNorm + SwiGLU + MHA
+- **LLaMA 3**: RoPE + RMSNorm + SwiGLU + GQA (Grouped Query Attention)
+- **Team model_v1**: Same as LLaMA 2
 - **Custom Combinations**: Any mix you want!
 
 **Configurable Components:**
@@ -36,6 +37,7 @@ This implementation supports **fully configurable architectures** - mix and matc
 | **Normalization** | layernorm, layernorm_nobias, rmsnorm | `model_components.py:28-73` |
 | **Activation** | gelu, silu, relu, leaky_relu | `model_components.py:178-192` |
 | **Position Encoding** | learned_absolute, rope, none | `model_components.py:82-162` |
+| **Attention Type** | MHA (multi-head), GQA (grouped query) | `model_builder.py:31-104` |
 | **Attention Backend** | sdpa (FlashAttention), manual | `model_builder.py:31-104` |
 | **Norm Position** | pre, post | `model_builder.py:108-132` |
 | **FFN Type** | standard (4x), swiglu (8/3x) | `model_components.py:167-215` |
@@ -52,6 +54,7 @@ class ModelArchitectureConfig:
     n_layer: int = 12
     n_embd: int = 768
     n_head: int = 12
+    num_key_value_heads: Optional[int] = None  # For GQA (None = MHA)
     block_size: int = 1024
     vocab_size: int = 50304
     
@@ -76,23 +79,34 @@ class ModelArchitectureConfig:
 - LayerNorm (no bias)
 - GELU activation, standard FFN (4x)
 - Post-norm, weight tying
+- Multi-Head Attention (MHA)
 
-**LLaMA** (Reference: `model_config.py:180-203`):
+**LLaMA 2** (Reference: `model_config.py:180-203`):
 - RoPE positions
 - RMSNorm
 - SwiGLU activation (8/3x expansion)
 - Pre-norm, no weight tying
+- Multi-Head Attention (MHA)
+
+**LLaMA 3** (Reference: `model_config.py:206-230`):
+- RoPE positions (extended: theta=500000)
+- RMSNorm
+- SwiGLU activation (3.5x expansion)
+- Pre-norm, no weight tying
+- **Grouped Query Attention (GQA)**: 8 KV heads
+- 128K vocabulary
 
 **Usage:**
 ```python
 # In config file:
-arch_preset = 'llama'  # Or 'gpt2', 'hybrid', 'team', 'custom'
+arch_preset = 'llama3'  # Or 'llama', 'gpt2', 'hybrid', 'team', 'custom'
 
 # Or customize:
 arch_preset = 'custom'
 normalization = 'rmsnorm'
 position_encoding = 'rope'
-ffn_type = 'standard'
+ffn_type = 'swiglu'
+num_key_value_heads = 8  # Enable GQA
 ...
 ```
 
@@ -129,6 +143,99 @@ POSITION_ENCODING_REGISTRY['alibi'] = ALiBiPositionEncoding
 # 3. Use in config
 position_encoding = 'alibi'  # Done!
 ```
+
+---
+
+## Grouped Query Attention (GQA)
+
+### What is GQA?
+
+**Grouped Query Attention** (introduced in LLaMA 3) reduces memory and computation by **sharing KV heads across multiple Q heads**.
+
+**Multi-Head Attention (MHA)** - Traditional approach:
+- N query heads, N key heads, N value heads
+- Example: 32 Q, 32 K, 32 V heads
+- Large KV cache for inference
+
+**Grouped Query Attention (GQA)** - LLaMA 3 approach:
+- N query heads, M key heads, M value heads (M < N)
+- Example: 32 Q heads, 8 KV heads (4:1 ratio)
+- 4× smaller KV cache for inference
+- Minimal quality loss (~1-2% perplexity increase)
+
+### Implementation Details
+
+**Reference:** `model_builder.py:31-104` (ConfigurableAttention)
+
+```python
+# GQA configuration
+n_head = 32                    # Query heads
+num_key_value_heads = 8        # KV heads (shared)
+n_rep = n_head // num_key_value_heads  # 4 Q heads per KV head
+
+# Forward pass
+q = self.c_q(x)                # [B, T, 32*head_dim]
+kv = self.c_kv(x)              # [B, T, 2*8*head_dim]  (smaller!)
+
+# Reshape and repeat KV
+k = k.repeat_interleave(n_rep, dim=1)  # Broadcast to 32 heads
+v = v.repeat_interleave(n_rep, dim=1)
+
+# Standard attention
+attn = (q @ k.transpose(-2, -1)) / sqrt(d_k)
+out = attn @ v
+```
+
+### Parameter Count Impact
+
+**MHA** (32 heads, head_dim=128, d_model=4096):
+```python
+Q projection: 4096 × 4096 = 16.8M params
+K projection: 4096 × 4096 = 16.8M params
+V projection: 4096 × 4096 = 16.8M params
+Total: 50.3M params per layer
+```
+
+**GQA** (32 Q heads, 8 KV heads, head_dim=128, d_model=4096):
+```python
+Q projection: 4096 × 4096 = 16.8M params
+K projection: 4096 × 1024 = 4.2M params  (75% smaller!)
+V projection: 4096 × 1024 = 4.2M params  (75% smaller!)
+Total: 25.2M params per layer (50% reduction)
+```
+
+### FLOPs Calculation Impact
+
+**Reference:** `flops_parameter_counting/detailed_cost_analysis.py:377-387`
+
+GQA reduces FLOPs for QKV projections:
+```python
+# MHA
+qkv_flops = 3 * (2 * seq_len * d_model * d_model)
+
+# GQA
+q_flops = 2 * seq_len * d_model * d_model
+kv_flops = 2 * seq_len * d_model * (n_kv_heads * head_dim)  # Smaller!
+total_flops = q_flops + kv_flops
+```
+
+For LLaMA 3.1 8B (32 Q heads, 8 KV heads):
+- **Attention projection FLOPs reduced by ~33%**
+- **Total model FLOPs reduced by ~8-10%** (attention is ~30% of total)
+- **Inference memory reduced by 75%** (KV cache)
+
+### When to Use GQA
+
+**Use GQA when:**
+- ✅ Deploying for inference (huge KV cache savings)
+- ✅ Training large models (>7B parameters)
+- ✅ Following LLaMA 3 architecture
+- ✅ Memory constrained
+
+**Use MHA when:**
+- ✅ Small models (<1B parameters)
+- ✅ Maximum quality is critical
+- ✅ Following GPT-2/LLaMA 2 architecture
 
 ---
 
@@ -177,12 +284,21 @@ Where:
 #### Training FLOPs (Forward + Backward)
 
 ```python
-# Reference: model.py:406-408
-forward_flops_per_token = L * flops_per_layer / S
-training_flops_per_token = 3 * forward_flops_per_token  # 1 forward + 2 backward
+# PaLM MFU Formula (Appendix B)
+# Reference: model_builder.py:383-403
+N_billion = non_embedding_params / 1e9
+Q = hidden_dim // num_heads
+T = sequence_length
+
+non_attn_flops = 6.0 * N_billion  # GFLOPs/token
+attn_flops = 12.0 * L * H * Q * T / 1e9  # GFLOPs/token
+training_flops_per_token = non_attn_flops + attn_flops  # GFLOPs/token
 ```
 
-**Backward Pass Factor**: 2× forward (from Epoch AI research)
+**PaLM Formula (6N + 12LHQT)**: Industry-standard MFU denominator
+- Used by PaLM, GPT-3, Gopher, MT-NLG papers
+- Accounts for forward + backward in matmul FLOPs
+- FMA counted as 2 FLOPs; excludes rematerialization
 - Reference: https://epoch.ai/blog/backward-forward-FLOP-ratio
 
 #### MFU Calculation
@@ -205,6 +321,7 @@ hardware_specs = {
         'H200': {'bf16': 1979e12, 'fp16': 1979e12, 'fp32': 67e12},
         'H100': {'bf16': 989e12,  'fp16': 989e12,  'fp32': 67e12},
         'A100': {'bf16': 312e12,  'fp16': 312e12,  'fp32': 19.5e12},
+                'A6000': {'bf16': 155.0e12, 'fp16': 155.0e12, 'fp32': 38.7e12},  # Dense FP16
         'V100': {'bf16': 125e12,  'fp16': 125e12,  'fp32': 15.7e12},
     }
 }
@@ -488,13 +605,17 @@ logger.log_iter_detailed(
 
 ```bash
 # Single GPU - Test different architectures
-python train.py config/full_gpt2_124m.py        # GPT-2 architecture
-python train.py config/full_llama_124m.py       # LLaMA architecture
+python train.py config/full_gpt2_124m.py        # GPT-2 architecture (MHA)
+python train.py config/full_llama_124m.py       # LLaMA 2 architecture (MHA)
+python train.py config/full_llama3_8b.py        # LLaMA 3 architecture (GQA)
 python train.py config/arch_team.py        # Team's model_v1
 python train.py config/full_custom.py      # Your custom mix
 
 # Override architecture on command line
 python train.py config/full_gpt2_124m.py --normalization=rmsnorm --position_encoding=rope
+
+# Test GQA (Grouped Query Attention)
+python train.py config/full_custom.py --arch_preset=llama3 --n_head=16 --num_key_value_heads=4
 
 # Multi-GPU DDP (4 GPUs)
 torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py
@@ -505,21 +626,29 @@ torchrun --standalone --nproc_per_node=4 train.py config/full_gpt2_124m.py --use
 # Multi-GPU with FSDP (75% memory reduction)
 torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py --use_fsdp=True
 
-# HGX B200 (8 GPUs, future)
-torchrun --standalone --nproc_per_node=8 train.py config/full_llama_124m.py --use_fsdp=True
+# LLaMA 3.1 8B with FSDP (8 GPUs)
+torchrun --standalone --nproc_per_node=8 train.py config/full_llama3_8b.py --use_fsdp=True
+
+# HGX B200 (8 GPUs, optimal)
+torchrun --standalone --nproc_per_node=8 train.py config/full_llama3_8b.py --use_fsdp=True
 ```
 
 ### Key Configuration Flags
 
 ```bash
 # Architecture (modular system)
---arch_preset=llama          # 'gpt2', 'llama', 'hybrid', 'team', 'custom'
+--arch_preset=llama3         # 'gpt2', 'llama', 'llama3', 'hybrid', 'team', 'custom'
 --normalization=rmsnorm      # 'layernorm', 'layernorm_nobias', 'rmsnorm'
 --activation=gelu            # 'gelu', 'silu', 'relu', 'leaky_relu'
 --position_encoding=rope     # 'learned_absolute', 'rope', 'none'
 --norm_position=pre          # 'pre', 'post'
 --ffn_type=swiglu           # 'standard', 'swiglu'
 --weight_tying=False        # True/False
+
+# Attention (GQA support)
+--n_head=32                  # Number of query heads
+--num_key_value_heads=8      # Number of KV heads (for GQA, <n_head)
+                            # If not set, defaults to n_head (MHA)
 
 # Training
 --batch_size=12              # Micro-batch size per GPU
@@ -560,8 +689,8 @@ flops_per_layer = attention_flops + ffn_flops
 # 2. Total forward FLOPs per token
 forward_flops_per_token = L * flops_per_layer / S
 
-# 3. Training FLOPs (forward + backward)
-training_flops_per_token = 3 * forward_flops_per_token
+# 3. Training FLOPs (PaLM formula: 6N + 12LHQT)
+training_flops_per_token = 6.0 * N_billion + 12.0 * L * H * Q * T / 1e9  # GFLOPs
 
 # 4. Iteration FLOPs
 tokens_per_iter = S * batch_size * gradient_accum_steps

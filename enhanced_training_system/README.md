@@ -382,8 +382,9 @@ else:
 # Total:
 total_forward = L * (attention_flops + ffn_flops + rope_flops + norm_flops)
 
-# Training FLOPs (forward + backward):
-training_flops_per_token = 3 * forward_flops_per_token  # 1 forward + 2 backward
+# Training FLOPs (PaLM formula: 6N + 12LHQT):
+# N = non-embedding params (billions), Q = head_dim, T = seq_len
+training_flops_per_token = 6.0 * N_billion + 12.0 * L * H * Q * T / 1e9  # GFLOPs
 
 # MFU calculation:
 flops_achieved = training_flops_per_token * tokens_per_sec

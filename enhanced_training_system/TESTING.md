@@ -52,8 +52,11 @@ cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
 # Test GPT-2 architecture
 python train.py config/full_gpt2_124m.py --max_iters=100 --compile=False
 
-# Test LLaMA architecture
+# Test LLaMA 2 architecture
 python train.py config/full_llama_124m.py --max_iters=100 --compile=False
+
+# Test LLaMA 3 architecture (with GQA)
+python train.py config/full_llama3_8b.py --max_iters=50 --compile=False
 
 # Test team's model_v1 architecture
 python train.py config/full_team_124m.py --max_iters=100 --compile=False
@@ -65,7 +68,8 @@ python train.py config/full_custom.py --max_iters=100 --compile=False
 **Verify:**
 - Architecture name differs for each
 - GPT-2: ~28 GF/token
-- LLaMA: ~35 GF/token (higher due to SwiGLU)
+- LLaMA 2: ~35 GF/token (higher due to SwiGLU)
+- LLaMA 3: Shows GQA (8 KV heads, 32 Q heads)
 - JSON logs created in `out/`
 
 ---
@@ -123,6 +127,36 @@ python compare_architectures.py --latest 3
 # 1      run_20250103_143022      llama(rmsnorm/rope/swiglu)    3.1500      31.20     4512.3      
 # 2      run_20250103_142512      gpt2(layernorm_nobias/...)    3.2400      32.50     4298.1      
 # ...
+```
+
+---
+
+## 🧬 Test 4.5: Test GQA (Grouped Query Attention)
+
+Test LLaMA 3 with Grouped Query Attention:
+
+```bash
+cd /Users/aaronfeng/Repo/Hao/llm_TII/enhanced_training_system
+
+# Test LLaMA 3 with GQA (8 KV heads, 32 Q heads)
+python train.py config/full_llama3_8b.py --max_iters=50 --compile=False
+
+# Check startup output shows GQA info:
+# Should display:
+# - Q heads: 32
+# - KV heads: 8
+# - Q:KV ratio: 4:1
+# - Architecture: "...GQA(8kv)..."
+
+# Test custom GQA configuration
+python train.py config/full_custom.py \
+  --arch_preset=llama3 \
+  --n_head=16 \
+  --num_key_value_heads=4 \
+  --max_iters=50 \
+  --compile=False
+
+# Should show 16 Q heads, 4 KV heads (4:1 ratio)
 ```
 
 ---
@@ -434,26 +468,41 @@ Architecture Name:     12L-12H-768D-AbsPos-LN-NB-GELU-PostNorm
 FLOPs per token:       ~28.45 GFLOPs
 Attention/FFN ratio:   ~0.67
 Expected MFU (A100):   30-35%
+Attention Type:        MHA (Multi-Head)
 ```
 
-### LLaMA (full_llama_124m.py)
+### LLaMA 2 (full_llama_124m.py)
 ```
 Architecture Name:     12L-12H-768D-RoPE-RMS-SwiGLU-PreNorm
 FLOPs per token:       ~35.12 GFLOPs (25% higher due to SwiGLU)
 Attention/FFN ratio:   ~0.52 (more FFN compute)
 Expected MFU (A100):   28-33%
+Attention Type:        MHA (Multi-Head)
+```
+
+### LLaMA 3 (full_llama3_8b.py)
+```
+Architecture Name:     32L-32H-4096D-RoPE-RMS-SwiGLU-PreNorm-GQA(8kv)
+Parameters:            ~8B
+Q heads:               32
+KV heads:              8 (4:1 Q:KV ratio)
+Expected MFU (A100):   40-50% (GQA is efficient)
+Attention Type:        GQA (Grouped Query)
+Vocab Size:            128256 (vs 32000 in LLaMA 2)
+RoPE theta:            500000 (vs 10000 in LLaMA 2)
 ```
 
 ### Team (full_team_124m.py)
 ```
 Architecture Name:     12L-12H-768D-RoPE-RMS-SwiGLU-PreNorm
-Same as LLaMA
+Same as LLaMA 2
 ```
 
 ### Hybrid (full_custom.py - depends on your config)
 ```
 Architecture Name:     Varies based on components chosen
 FLOPs per token:       Varies (28-36 GF range)
+Attention Type:        Configurable (MHA or GQA)
 ```
 
 ---
@@ -469,9 +518,14 @@ python train.py config/full_gpt2_124m.py --max_iters=50       # Quick test
 
 # ===== Architecture Tests =====
 python train.py config/full_gpt2_124m.py --max_iters=100      # GPT-2
-python train.py config/full_llama_124m.py --max_iters=100     # LLaMA
+python train.py config/full_llama_124m.py --max_iters=100     # LLaMA 2
+python train.py config/full_llama3_8b.py --max_iters=50       # LLaMA 3 (GQA)
 python train.py config/full_team_124m.py --max_iters=100      # Team
 python train.py config/full_custom.py --max_iters=100    # Custom
+
+# ===== GQA Tests =====
+python train.py config/full_llama3_8b.py --max_iters=50 --compile=False  # Test GQA
+python train.py config/full_custom.py --arch_preset=llama3 --n_head=16 --num_key_value_heads=4 --max_iters=50  # Custom GQA
 
 # ===== Override Tests =====
 python train.py config/full_gpt2_124m.py --position_encoding=rope            # Single override
@@ -484,7 +538,7 @@ python compare_architectures.py --latest 5               # Latest 5
 # ===== Multi-GPU =====
 torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py              # DDP
 torchrun --standalone --nproc_per_node=4 train.py config/full_gpt2_124m.py --use_zero1=True   # ZeRO-1
-torchrun --standalone --nproc_per_node=4 train.py config/full_llama_124m.py --use_fsdp=True   # FSDP
+torchrun --standalone --nproc_per_node=8 train.py config/full_llama3_8b.py --use_fsdp=True   # FSDP (LLaMA 3)
 
 # ===== Utilities =====
 python -c "from model_config import list_presets; list_presets()"    # List presets
