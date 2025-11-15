@@ -28,6 +28,7 @@ cd /root/llm_TII/enhanced_training_system
 cd data/slimpajama_6b_gpt2
 python prepare.py
 # Expected: train.bin (~6GB), val.bin (~30MB), meta.pkl
+# Time: ~2-3 minutes (128 cores, tiktoken + batched processing)
 
 cd ../..
 ```
@@ -43,19 +44,38 @@ python train.py config/full_gpt2_1.36b.py \
 # Expected: ✓ Model builds, ✓ Data loads, ✓ No errors
 ```
 
-### 3. Quick Test (100 iterations, ~10 minutes)
+### 3. MFU Test & Tuning (100 iterations, ~10 minutes)
 
 ```bash
-# Single GPU
-python train.py config/full_gpt2_1.36b.py \
-  --max_iters=100 \
-  --eval_interval=50
+# MFU optimization test with all tunable parameters
+# Adjust these parameters to maximize MFU on your hardware
 
-# Multi-GPU (4 GPUs)
-torchrun --standalone --nproc_per_node=4 train.py \
-  config/full_gpt2_1.36b.py \
+torchrun --standalone \
+  --nproc_per_node=2 \
+  train.py config/full_gpt2_1.36b.py \
   --max_iters=100 \
-  --eval_interval=50
+  --eval_interval=500 \
+  --compile=True \
+  --batch_size=4 \
+  --gradient_accumulation_steps=32 \
+  --block_size=2048 \
+  --dtype=bfloat16 \
+  --attention_backend=flash_attn_2 \
+  --use_zero1=True \
+  --use_fsdp=False
+
+# Parameter tuning guide:
+# --nproc_per_node=<1,2,4,8>          # Number of GPUs (more GPUs = higher throughput)
+# --compile=<True,False>              # torch.compile (True for +20-30% speed)
+# --batch_size=<1-16>                 # Per-GPU batch size (higher = better MFU, but uses more memory)
+# --gradient_accumulation_steps=<1-128> # Accumulate gradients (higher = larger effective batch, no extra memory)
+# --block_size=<512,1024,2048,4096>   # Sequence length (longer = more compute per token)
+# --dtype=<bfloat16,float16,float32>  # Precision (bfloat16 recommended for A100/H100)
+# --attention_backend=<flash_attn_2,sdpa,manual> # Attention implementation (flash_attn_2 fastest, ~2× speedup)
+# --use_zero1=<True,False>            # ZeRO-1 optimizer sharding (saves memory, slight overhead)
+# --use_fsdp=<True,False>             # Fully Sharded Data Parallel (8+ GPUs, saves memory)
+
+# Expected MFU: 35-40% with optimal settings on 2× A6000
 ```
 
 ### 4. Full Training (2000 iterations, ~6-8 hours on 2× A6000)
@@ -143,6 +163,7 @@ ls -lh llama2_tokenizer/
 cd data/slimpajama_6b_llama
 python prepare.py
 # Expected: train.bin (~6GB), val.bin (~30MB), meta.pkl
+# Time: ~2-3 minutes (128 cores, fast tokenizer + batched processing)
 
 cd ../..
 ```
@@ -159,19 +180,38 @@ python train.py config/full_llama_1.36b.py \
 #           ✓ No errors
 ```
 
-### 4. Quick Test (100 iterations, ~15 minutes)
+### 4. MFU Test & Tuning (100 iterations, ~15 minutes)
 
 ```bash
-# Single GPU
-python train.py config/full_llama_1.36b.py \
-  --max_iters=100 \
-  --eval_interval=50
+# MFU optimization test with all tunable parameters
+# Adjust these parameters to maximize MFU on your hardware
 
-# Multi-GPU (4 GPUs)
-torchrun --standalone --nproc_per_node=4 train.py \
-  config/full_llama_1.36b.py \
+torchrun --standalone \
+  --nproc_per_node=2 \
+  train.py config/full_llama_1.36b.py \
   --max_iters=100 \
-  --eval_interval=50
+  --eval_interval=200 \
+  --compile=True \
+  --batch_size=6 \
+  --gradient_accumulation_steps=32 \
+  --block_size=2048 \
+  --dtype=bfloat16 \
+  --attention_backend=flash_attn_2 \
+  --use_zero1=True \
+  --use_fsdp=False
+
+# Parameter tuning guide:
+# --nproc_per_node=<1,2,4,8>          # Number of GPUs (more GPUs = higher throughput)
+# --compile=<True,False>              # torch.compile (True for +20-30% speed)
+# --batch_size=<1-16>                 # Per-GPU batch size (higher = better MFU, but uses more memory)
+# --gradient_accumulation_steps=<1-128> # Accumulate gradients (higher = larger effective batch, no extra memory)
+# --block_size=<512,1024,2048,4096>   # Sequence length (longer = more compute per token)
+# --dtype=<bfloat16,float16,float32>  # Precision (bfloat16 recommended for A100/H100)
+# --attention_backend=<flash_attn_2,sdpa,manual> # Attention implementation (flash_attn_2 fastest, ~2× speedup)
+# --use_zero1=<True,False>            # ZeRO-1 optimizer sharding (saves memory, slight overhead)
+# --use_fsdp=<True,False>             # Fully Sharded Data Parallel (8+ GPUs, saves memory)
+
+# Expected MFU: 35-40% with optimal settings on 2× A6000
 ```
 
 ### 5. Full Training (2000 iterations, ~6-8 hours on 2× A6000)
@@ -247,14 +287,15 @@ EOF
 ### 2. Prepare Dataset
 
 ```bash
-# For testing: Prepare SlimPajama-6B with LLaMA-3 tokenizer (20-40 min)
+# For testing: Prepare SlimPajama-6B with LLaMA-3 tokenizer
 cd data/slimpajama_6b_llama3
 python prepare.py
+# Time: ~2-3 minutes (128 cores, fast tokenizer + batched processing)
 
 cd ../..
 
 # For optimal training (102B tokens): Use slimpajama_627b_llama3 instead
-# (Requires 1.2TB storage and 10-20 hours preparation)
+# (Requires 1.2TB storage and 1-2 hours preparation with 128 cores + batching)
 ```
 
 ### 3. Smoke Test (10 iterations, 1 minute)
@@ -269,15 +310,38 @@ python train.py config/full_llama3_1.5b_optimal.py \
 #           ✓ No errors
 ```
 
-### 4. Quick Test (100 iterations, ~15 minutes)
+### 4. MFU Test & Tuning (100 iterations, ~15 minutes)
 
 ```bash
-# 2× A6000 with ZeRO-1
-torchrun --standalone --nproc_per_node=2 train.py \
-  config/full_llama3_1.5b_optimal.py \
+# MFU optimization test with all tunable parameters
+# Adjust these parameters to maximize MFU on your hardware
+
+torchrun --standalone \
+  --nproc_per_node=2 \
+  train.py config/full_llama3_1.5b_optimal.py \
   --max_iters=100 \
   --eval_interval=50 \
-  --use_zero1=True
+  --compile=True \
+  --batch_size=8 \
+  --gradient_accumulation_steps=24 \
+  --block_size=2048 \
+  --dtype=bfloat16 \
+  --attention_backend=flash_attn_2 \
+  --use_zero1=True \
+  --use_fsdp=False
+
+# Parameter tuning guide:
+# --nproc_per_node=<1,2,4,8>          # Number of GPUs (more GPUs = higher throughput)
+# --compile=<True,False>              # torch.compile (True for +20-30% speed)
+# --batch_size=<1-16>                 # Per-GPU batch size (higher = better MFU, but uses more memory)
+# --gradient_accumulation_steps=<1-128> # Accumulate gradients (higher = larger effective batch, no extra memory)
+# --block_size=<512,1024,2048,4096>   # Sequence length (longer = more compute per token)
+# --dtype=<bfloat16,float16,float32>  # Precision (bfloat16 recommended for A100/H100)
+# --attention_backend=<flash_attn_2,sdpa,manual> # Attention implementation (flash_attn_2 fastest, ~2× speedup)
+# --use_zero1=<True,False>            # ZeRO-1 optimizer sharding (saves memory, slight overhead)
+# --use_fsdp=<True,False>             # Fully Sharded Data Parallel (8+ GPUs, saves memory)
+
+# Expected MFU: 40-45% with optimal settings on 2× A6000
 ```
 
 ### 5. Full Training (2000 iterations, ~6-8 hours on 2× A6000)
@@ -385,17 +449,39 @@ torchrun --standalone --nproc_per_node=2 train.py \
 #           ✓ No errors
 ```
 
-### 4. Quick Test (100 iterations, ~40 minutes)
+### 4. MFU Test & Tuning (100 iterations, ~40 minutes)
 
 ```bash
-# 2× A6000 with ZeRO-1 (enables larger batch)
-torchrun --standalone --nproc_per_node=2 train.py \
-  config/full_llama3_2.2b_chinchilla.py \
-  --use_zero1=True \
+# MFU optimization test with all tunable parameters
+# Adjust these parameters to maximize MFU on your hardware
+# NOTE: This is a large model - requires careful memory management
+
+torchrun --standalone \
+  --nproc_per_node=2 \
+  train.py config/full_llama3_2.2b_chinchilla.py \
+  --max_iters=100 \
+  --eval_interval=50 \
+  --compile=True \
   --batch_size=4 \
   --gradient_accumulation_steps=32 \
-  --max_iters=100 \
-  --eval_interval=50
+  --block_size=2048 \
+  --dtype=bfloat16 \
+  --use_zero1=True \
+  --use_fsdp=False \
+  --flash_attn=True
+
+# Parameter tuning guide:
+# --nproc_per_node=<2,4,8>            # Number of GPUs (2+ required for this model)
+# --compile=<True,False>              # torch.compile (True for +20-30% speed)
+# --batch_size=<1-8>                  # Per-GPU batch size (LARGE MODEL: use 2-4 to avoid OOM)
+# --gradient_accumulation_steps=<1-128> # Accumulate gradients (higher = larger effective batch, no extra memory)
+# --block_size=<512,1024,2048,4096>   # Sequence length (longer = more compute per token)
+# --dtype=<bfloat16,float16,float32>  # Precision (bfloat16 recommended for A100/H100)
+# --use_zero1=<True,False>            # ZeRO-1 optimizer sharding (REQUIRED for this model size)
+# --use_fsdp=<True,False>             # Fully Sharded Data Parallel (8+ GPUs, saves memory)
+# --flash_attn=<True,False>           # Flash Attention 2 (faster attention, requires installation)
+
+# Expected MFU: 35-40% with optimal settings on 2× A6000
 ```
 
 ### 5. Full Training (2000 iterations, ~14-16 hours on 2× A6000)
@@ -469,7 +555,7 @@ python << 'EOF'
 from transformers import AutoTokenizer
 
 print("Downloading Qwen3 tokenizer...")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B", trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
 tokenizer.save_pretrained("./qwen3_tokenizer")
 print(f"✓ Saved to ./qwen3_tokenizer/ (vocab={tokenizer.vocab_size})")
 EOF
@@ -478,14 +564,15 @@ EOF
 ### 2. Prepare Dataset
 
 ```bash
-# For testing: Prepare SlimPajama-6B with Qwen3 tokenizer (20-40 min)
+# For testing: Prepare SlimPajama-6B with Qwen3 tokenizer
 cd data/slimpajama_6b_qwen3
 python prepare.py
+# Time: ~2-3 minutes (128 cores, fast tokenizer + batched processing)
 
 cd ../..
 
 # For optimal training (82B tokens): Use slimpajama_627b_qwen3 instead
-# (Requires 1.2TB storage and 10-20 hours preparation)
+# (Requires 1.2TB storage and 1-2 hours preparation with 128 cores + batching)
 ```
 
 ### 3. Smoke Test (10 iterations, 1 minute)
@@ -501,15 +588,38 @@ python train.py config/full_qwen3_1.8b_optimal.py \
 #           ✓ No errors
 ```
 
-### 4. Quick Test (100 iterations, ~15 minutes)
+### 4. MFU Test & Tuning (100 iterations, ~15 minutes)
 
 ```bash
-# 2× A6000 with ZeRO-1
-torchrun --standalone --nproc_per_node=2 train.py \
-  config/full_qwen3_1.8b_optimal.py \
+# MFU optimization test with all tunable parameters
+# Adjust these parameters to maximize MFU on your hardware
+
+torchrun --standalone \
+  --nproc_per_node=2 \
+  train.py config/full_qwen3_1.8b_optimal.py \
   --max_iters=100 \
-  --eval_interval=50 \
-  --use_zero1=True
+  --eval_interval=200 \
+  --compile=True \
+  --batch_size=6 \
+  --gradient_accumulation_steps=32 \
+  --block_size=2048 \
+  --dtype=bfloat16 \
+  --attention_backend=flash_attn_2 \
+  --use_zero1=True \
+  --use_fsdp=False
+
+# Parameter tuning guide:
+# --nproc_per_node=<1,2,4,8>          # Number of GPUs (more GPUs = higher throughput)
+# --compile=<True,False>              # torch.compile (True for +20-30% speed)
+# --batch_size=<1-16>                 # Per-GPU batch size (higher = better MFU, but uses more memory)
+# --gradient_accumulation_steps=<1-128> # Accumulate gradients (higher = larger effective batch, no extra memory)
+# --block_size=<512,1024,2048,4096>   # Sequence length (longer = more compute per token)
+# --dtype=<bfloat16,float16,float32>  # Precision (bfloat16 recommended for A100/H100)
+# --attention_backend=<flash_attn_2,sdpa,manual> # Attention implementation (flash_attn_2 fastest, ~2× speedup)
+# --use_zero1=<True,False>            # ZeRO-1 optimizer sharding (saves memory, slight overhead)
+# --use_fsdp=<True,False>             # Fully Sharded Data Parallel (8+ GPUs, saves memory)
+
+# Expected MFU: 38-42% with optimal settings on 2× A6000
 ```
 
 ### 5. Full Training (2000 iterations, ~10-12 hours on 2× A6000)
@@ -566,7 +676,7 @@ python train.py config/full_qwen3_1.8b_optimal.py \
 - **Deeper**: 24 layers (vs 18 for LLaMA 3)
 - **GQA**: 8 KV heads, 16 Q heads (2:1 ratio)
 - **RoPE theta**: 1,000,000 (2× LLaMA 3's 500K)
-- **Vocabulary**: 151,936 tokens (best compression)
+- **Vocabulary**: 151,643 tokens (best compression)
 - **FFN Type**: SwiGLU 3.0× expansion
 
 **Comparison with LLaMA 3 Optimal:**

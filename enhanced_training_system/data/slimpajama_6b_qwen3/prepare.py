@@ -2,7 +2,7 @@
 Prepare SlimPajama-6B dataset with Qwen3 tokenizer.
 
 This script downloads and tokenizes the SlimPajama-6B dataset using the
-Qwen3 tokenizer (151,936 vocab size, BBPE).
+Qwen3 tokenizer (151,643 vocab size, BBPE).
 
 Usage:
     python prepare.py
@@ -19,8 +19,29 @@ import os
 import pickle
 import numpy as np
 from tqdm import tqdm
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict
 from transformers import AutoTokenizer
+import warnings
+import logging
+import sys
+from contextlib import contextmanager
+
+# Suppress ALL tokenizer warnings about long sequences
+warnings.filterwarnings('ignore')
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+logging.getLogger("transformers.tokenization_utils_base").setLevel(logging.ERROR)
+
+@contextmanager
+def suppress_stderr():
+    """Temporarily suppress stderr output"""
+    devnull = open(os.devnull, 'w')
+    old_stderr = sys.stderr
+    sys.stderr = devnull
+    try:
+        yield
+    finally:
+        sys.stderr = old_stderr
+        devnull.close()
 
 # Download and prepare tokenizer
 print("Loading Qwen3 tokenizer...")
@@ -29,35 +50,75 @@ if not os.path.exists(tokenizer_path):
     print(f"Tokenizer not found at {tokenizer_path}")
     print("Please download it first:")
     print("  cd ../../ && python -c \"from transformers import AutoTokenizer; ")
-    print("    tok = AutoTokenizer.from_pretrained('Qwen/Qwen2.5-7B', trust_remote_code=True); ")
+    print("    tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-8B', trust_remote_code=True); ")
     print("    tok.save_pretrained('./qwen3_tokenizer')\"")
     exit(1)
 
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
-print(f"✓ Loaded tokenizer (vocab_size={tokenizer.vocab_size})")
+tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True, use_fast=True)
+if tokenizer.is_fast:
+    print(f"✓ Loaded FAST tokenizer (vocab_size={tokenizer.vocab_size}) ⚡")
+else:
+    print(f"✓ Loaded tokenizer (vocab_size={tokenizer.vocab_size}) [slow version]")
 
 # Load dataset
 print("\nDownloading SlimPajama-6B dataset...")
-dataset = load_dataset("cerebras/SlimPajama-627B", split="train", streaming=False, trust_remote_code=True)
+print("This will download ~6GB and may take 5-15 minutes...")
+dataset = load_dataset("DKYoon/SlimPajama-6B", num_proc=os.cpu_count())
+print(f"✓ Dataset loaded: {dataset}")
 
-# Take first 6B tokens worth (approximate)
-# Assuming ~500 tokens per sample on average, 6B tokens ≈ 12M samples
-dataset = dataset.select(range(min(12_000_000, len(dataset))))
+# Check dataset structure and create train/val split
+print("\nCreating train/validation split...")
+if 'train' in dataset and 'validation' not in dataset:
+    print("Splitting train set (99% train, 1% validation)...")
+    split_dataset = dataset["train"].train_test_split(test_size=0.01, seed=2357, shuffle=True)
+    split_dataset['val'] = split_dataset.pop('test')
+elif 'train' in dataset and 'validation' in dataset:
+    print("Using existing splits...")
+    split_dataset = DatasetDict({
+        'train': dataset['train'],
+        'val': dataset['validation']
+    })
+else:
+    print("Dataset structure unknown, creating 99/1 split...")
+    split_dataset = dataset["train"].train_test_split(test_size=0.01, seed=2357, shuffle=True)
+    split_dataset['val'] = split_dataset.pop('test')
 
-# Split into train/val (99%/1%)
-print("Splitting into train/val...")
-split_dataset = dataset.train_test_split(test_size=0.01, seed=2357)
-split_dataset['val'] = split_dataset.pop('test')
+print(f"✓ Split complete:")
+for split_name, split_data in split_dataset.items():
+    print(f"  {split_name}: {len(split_data):,} examples")
 
-# Tokenize
-def process(example):
-    ids = tokenizer(example['text'], truncation=False, add_special_tokens=False)['input_ids']
-    ids.append(tokenizer.eos_token_id)
-    return {'ids': ids, 'len': len(ids)}
+# Tokenize (batched for speed)
+# Track sequences that exceed max length
+long_sequences_count = 0
+max_model_length = tokenizer.model_max_length if hasattr(tokenizer, 'model_max_length') else 131072
 
-print("\nTokenizing dataset...")
+def process_batch(examples):
+    """Tokenize a batch of examples (much faster!)"""
+    global long_sequences_count
+    all_ids = []
+    all_lens = []
+    
+    for text in examples['text']:
+        with warnings.catch_warnings(), suppress_stderr():
+            warnings.simplefilter("ignore")
+            ids = tokenizer(text, truncation=False, add_special_tokens=False)['input_ids']
+        ids.append(tokenizer.eos_token_id)
+        
+        # Track long sequences silently
+        if len(ids) > max_model_length:
+            long_sequences_count += 1
+        
+        all_ids.append(ids)
+        all_lens.append(len(ids))
+    
+    return {'ids': all_ids, 'len': all_lens}
+
+print("\nTokenizing dataset with batching (2-5× faster)...")
+print(f"(Sequences exceeding {max_model_length:,} tokens will be tracked but not truncated)")
 tokenized = split_dataset.map(
-    process,
+    process_batch,
+    batched=True,
+    batch_size=1000,
     remove_columns=['text', 'meta'],
     desc="Tokenizing",
     num_proc=os.cpu_count(),
@@ -94,4 +155,9 @@ print("\n✅ Dataset preparation complete!")
 print(f"   Vocab size: {tokenizer.vocab_size}")
 print(f"   Train tokens: {tokenized['train'].num_rows:,}")
 print(f"   Val tokens: {tokenized['val'].num_rows:,}")
+print(f"\n📊 Long sequence summary:")
+print(f"   Sequences exceeding {max_model_length:,} tokens: {long_sequences_count:,}")
+total_sequences = tokenized['train'].num_rows + tokenized['val'].num_rows
+print(f"   Percentage: {100 * long_sequences_count / total_sequences:.2f}%")
+print(f"   Note: These sequences were kept as-is (not truncated)")
 

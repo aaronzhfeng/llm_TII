@@ -5,11 +5,11 @@
 - **Subset**: First ~12M samples (≈6B tokens)
 
 ## Tokenizer
-- **Model**: [Qwen/Qwen2.5-7B](https://huggingface.co/Qwen/Qwen2.5-7B)
-- **Vocabulary Size**: 151,936 tokens
+- **Model**: [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B) (Qwen3 official tokenizer)
+- **Vocabulary Size**: 151,643 tokens
 - **Type**: BBPE (Byte-level BPE)
 - **Best-in-class**: Highest compression efficiency among all tokenizers
-- **Note**: No authentication required (open source)
+- **Note**: No authentication required (open source). Note: Smaller models use Qwen2.5-X naming, but tokenizer is identical.
 
 ## Preparation
 
@@ -20,7 +20,7 @@ cd /root/llm_TII/enhanced_training_system
 # Download tokenizer (no login needed!)
 python << 'EOF'
 from transformers import AutoTokenizer
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B", trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
 tokenizer.save_pretrained("./qwen3_tokenizer")
 print(f"✓ Saved to ./qwen3_tokenizer/ (vocab={tokenizer.vocab_size})")
 EOF
@@ -35,7 +35,7 @@ python prepare.py
 ### 3. Expected output
 - `train.bin`: ~6GB tokenized training data
 - `val.bin`: ~30MB tokenized validation data
-- `meta.pkl`: Metadata (vocab_size=151936, etc.)
+- `meta.pkl`: Metadata (vocab_size=151643, etc.)
 
 ### Time: ~30-40 minutes (largest vocab = most processing)
 
@@ -52,10 +52,10 @@ This dataset is used by Qwen3 model configs:
 
 ## Why Qwen3 Tokenizer?
 ### Compression Efficiency (tokens for same text)
-- **Qwen3**: ~450 tokens/sample ✅ **Best**
-- **LLaMA-3**: ~480 tokens/sample
-- **LLaMA-2**: ~500 tokens/sample
-- **GPT-2**: ~520 tokens/sample
+- **Qwen3** (151,643 vocab): ~450 tokens/sample ✅ **Best**
+- **LLaMA-3** (128,256 vocab): ~480 tokens/sample
+- **LLaMA-2** (32,000 vocab): ~500 tokens/sample
+- **GPT-2** (50,257 vocab): ~520 tokens/sample
 
 ### Training Efficiency
 - **20% fewer tokens** than GPT-2 for same data
@@ -65,7 +65,7 @@ This dataset is used by Qwen3 model configs:
 
 ## Key Advantages
 - ✅ **Best tokenization efficiency** (BBPE)
-- ✅ **Largest vocabulary** (152K tokens)
+- ✅ **Largest vocabulary** (151,643 tokens - larger than LLaMA-3's 128K)
 - ✅ **Extended RoPE** (theta=1,000,000 vs LLaMA-3's 500,000)
 - ✅ **Deeper architecture** (24 layers vs LLaMA-3's 18)
 - ✅ **Open source** (no HuggingFace auth needed)
@@ -80,7 +80,7 @@ Both configs target same compute budget (1.36e21 FLOPs):
 | **Layers** | 24 (deeper) | 18 |
 | **Optimal Tokens** | 81.7B | 101.9B |
 | **Expected Loss** | **2.340** ✅ | 2.335 |
-| **Vocab Size** | 151,936 | 128,256 |
+| **Vocab Size** | 151,643 | 128,256 |
 | **RoPE Theta** | 1,000,000 | 500,000 |
 
 **Result**: Qwen3 achieves similar loss with **20% fewer training tokens** due to superior tokenization!

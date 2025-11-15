@@ -16,7 +16,7 @@ Key Qwen3 Features:
 - SwiGLU activation (3× expansion, Qwen3-style)
 - Extended RoPE (theta=1M)
 - GQA (2:1 ratio: 16 Q heads, 8 KV heads)
-- Qwen3 tokenizer (151,936 vocab)
+- Qwen3 tokenizer (151,643 vocab)
 - No weight tying
 - No bias
 
@@ -31,7 +31,7 @@ Comparison with LLaMA 3 Optimal (1.5B):
 │ FFN Type            │ SwiGLU 3.0×   │ SwiGLU 3.5×   │ Different  │
 │ FFN Size            │ 6144          │ 7168          │ Smaller    │
 │ RoPE theta          │ 1,000,000     │ 500,000       │ 2× larger  │
-│ Vocab Size          │ 151,936       │ 128,256       │ +18%       │
+│ Vocab Size          │ 151,643       │ 128,256       │ +18%       │
 │ Total Params        │ 1.83B         │ 1.54B         │ +19%       │
 │ Expected Loss       │ 2.340         │ 2.335         │ Similar    │
 │ Optimal Tokens      │ 81.7B         │ 101.9B        │ 20% fewer  │
@@ -87,7 +87,7 @@ n_head = 16                 # Number of query heads
 n_embd = 2048               # Hidden dimension
 num_key_value_heads = 8     # KV heads for GQA (2:1 Q:KV ratio)
 block_size = 2048           # Sequence length (can increase to 8K/32K if needed)
-vocab_size = 151936         # Qwen3 tokenizer vocabulary
+vocab_size = 151643         # Qwen3 tokenizer vocabulary
 dropout = 0.0
 
 # === FFN Dimension (Qwen3: 3× expansion) ===
@@ -192,7 +192,7 @@ wandb_run_name = 'optimal-1.8b'     # W&B run name
 # N = vocab_embed + pos_embed + L×(QKV_proj + attention_proj + FFN + norms)
 #
 # Components:
-# 1. Token embeddings: V×H = 151936×2048 = 311,165,952
+# 1. Token embeddings: V×H = 151643×2048 = 310,764,544
 # 2. Position embeddings: 0 (RoPE has no parameters)
 # 3. Per layer (24 layers):
 #    - Q projection: H×H = 2048×2048 = 4,194,304
@@ -204,7 +204,7 @@ wandb_run_name = 'optimal-1.8b'     # W&B run name
 #    - Layer total: 75,501,568
 #    - All layers: 24×75,501,568 = 1,812,037,632
 # 4. Final RMSNorm: H = 2,048
-# 5. Output projection: H×V = 2048×151936 = 311,165,952 (no weight tying)
+# 5. Output projection: H×V = 2048×151643 = 310,764,544 (no weight tying)
 #
 # Total: 311,165,952 + 0 + 1,812,037,632 + 2,048 + 311,165,952
 #      = 2,434,371,584 ≈ 2.43B parameters
@@ -241,7 +241,7 @@ wandb_run_name = 'optimal-1.8b'     # W&B run name
 #
 # 1. Dataset: Requires slimpajama_6b_qwen3 for testing
 #    - Prepare with: cd data/slimpajama_6b_qwen3 && python prepare.py
-#    - Uses Qwen3 tokenizer (151,936 vocab)
+#    - Uses Qwen3 tokenizer (151,643 vocab)
 #    - Storage: ~6 GB for train, ~30 MB for val
 #
 # 2. For optimal training (82B tokens):

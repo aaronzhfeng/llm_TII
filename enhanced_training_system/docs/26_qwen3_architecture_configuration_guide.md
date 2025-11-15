@@ -26,7 +26,7 @@ From the Qwen3 technical report and HuggingFace configurations, the dense models
 - **Bias:** No bias (attention_bias = false)
 - **Precision:** bfloat16
 - **Context Length:** 32K–128K tokens
-- **Tokenizer:** BBPE (Byte-level BPE), vocab ≈ 151,936 tokens
+- **Tokenizer:** BBPE (Byte-level BPE), vocab = 151,643 tokens
 
 ### Qwen3-0.6B Concrete Configuration
 
@@ -40,7 +40,7 @@ num_attention_heads = 16          # Q heads
 num_key_value_heads = 8           # KV heads (2:1 GQA ratio)
 head_dim = 128                    # hidden_size / num_attention_heads
 hidden_act = "silu"
-vocab_size = 151936
+vocab_size = 151643
 rope_theta = 1_000_000           # Extended RoPE base
 torch_dtype = "bfloat16"
 max_position_embeddings = 32768  # Context window
@@ -78,7 +78,7 @@ n_embd = 1024                       # Hidden dimension
 num_key_value_heads = 8             # KV heads (GQA 2:1 ratio)
 d_ff = 3072                         # FFN dimension (~3× hidden)
 block_size = 32768                  # Context window (can reduce for training)
-vocab_size = 151936                 # Qwen3 tokenizer vocab
+vocab_size = 151643                 # Qwen3 tokenizer vocab
 rope_theta = 1_000_000              # Extended RoPE base
 dropout = 0.0
 ```
@@ -116,7 +116,7 @@ d_ff = 6144  # 3 × 2048
 ### Qwen3 Tokenizer (BBPE)
 
 Qwen3 uses a Byte-level BPE tokenizer with:
-- **Vocabulary:** 151,936 tokens
+- **Vocabulary:** 151,643 tokens
 - **Special tokens:** Includes system, user, assistant markers
 - **Type:** BBPE (similar to GPT-2 but expanded vocab)
 
@@ -127,8 +127,8 @@ Use HuggingFace's tokenizer directly:
 ```python
 from transformers import AutoTokenizer
 
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
-# vocab_size: 151936
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B", trust_remote_code=True)
+# vocab_size: 151643
 # Special tokens: <|im_start|>, <|im_end|>, etc.
 ```
 
@@ -205,7 +205,7 @@ n_head = 16
 n_embd = 1024
 num_key_value_heads = 8
 d_ff = 3072
-vocab_size = 151936
+vocab_size = 151643
 rope_theta = 1_000_000
 ```
 
@@ -306,7 +306,7 @@ Compared to our existing models:
 - [ ] Extended RoPE theta (1M) support in `model_components.py`
 - [ ] Verify GQA works with 2:1 ratio (16:8)
 - [ ] Test SwiGLU with 3× expansion ratio
-- [ ] Confirm vocab_size=151936 handling
+- [x] Confirmed vocab_size=151643 (actual Qwen3 tokenizer)
 
 ### Configuration Files
 - [ ] `config/full_qwen3_0.6b.py` - baseline validation

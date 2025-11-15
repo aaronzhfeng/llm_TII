@@ -109,7 +109,7 @@ def get_qwen3_style_config() -> 'ModelArchitectureConfig':
         n_embd=1024,
         num_key_value_heads=8,  # GQA 2:1 ratio
         block_size=32768,       # Can override to 2048 for testing
-        vocab_size=151936,      # Qwen3 tokenizer
+        vocab_size=151643,      # Qwen3 tokenizer
         
         # Architecture choices
         normalization='rmsnorm',
@@ -175,7 +175,7 @@ if __name__ == "__main__":
 
 **Expected Output:**
 ```
-Vocabulary size: 151936
+Vocabulary size: 151643
 Special tokens: 
   - bos_token: <|endoftext|>
   - eos_token: <|endoftext|>
@@ -188,7 +188,7 @@ Special tokens:
 **Create:** `data/slimpajama_6b_qwen3/prepare.py`
 
 **Key Differences from LLaMA 3:**
-- Vocabulary: 151,936 (vs 128,256 for LLaMA 3)
+- Vocabulary: 151,643 (vs 128,256 for LLaMA 3)
 - Token IDs: Need `uint32` (vs `uint16` which only goes to 65K)
 - Special tokens: Different from LLaMA format
 
@@ -210,7 +210,7 @@ tokenizer = AutoTokenizer.from_pretrained(
 )
 
 print(f"Tokenizer vocabulary size: {tokenizer.vocab_size}")
-assert tokenizer.vocab_size == 151936, "Unexpected vocab size"
+assert tokenizer.vocab_size == 151643, "Unexpected vocab size"
 
 # Load dataset
 print("Loading SlimPajama-6B dataset...")
@@ -330,7 +330,7 @@ n_embd = 1024
 num_key_value_heads = 8
 d_ff = 3072
 block_size = 2048           # Reduced from 32K for testing
-vocab_size = 151936
+vocab_size = 151643
 rope_theta = 1_000_000
 dropout = 0.0
 bias = False
@@ -384,7 +384,7 @@ n_embd = 2048               # Scale width: 1024 → 2048
 num_key_value_heads = 8     # Keep GQA ratio 2:1
 d_ff = 6144                 # Scale FFN: 3 × 2048
 block_size = 2048
-vocab_size = 151936
+vocab_size = 151643
 rope_theta = 1_000_000
 dropout = 0.0
 bias = False
@@ -439,7 +439,7 @@ n_embd = 2304               # Scale to 2304
 num_key_value_heads = 8
 d_ff = 6912                 # 3 × 2304
 block_size = 2048
-vocab_size = 151936
+vocab_size = 151643
 rope_theta = 1_000_000
 dropout = 0.0
 bias = False
@@ -501,7 +501,7 @@ always_save_checkpoint = False
 **Download and Setup:**
 - [ ] Create `data/download_qwen3_tokenizer.py` script
 - [ ] Run script to download Qwen3 tokenizer locally
-- [ ] Verify vocabulary size is 151,936
+- [x] Verified vocabulary size is 151,643 (actual Qwen3)
 - [ ] Document special tokens and format
 
 **Dataset Preparation:**

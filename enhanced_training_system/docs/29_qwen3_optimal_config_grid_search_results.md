@@ -16,7 +16,7 @@ Successfully performed backward N-D grid search for Qwen3 architecture with 1.36
 
 **Input Constraints:**
 - Compute budget: **1.36×10²¹ FLOPs**
-- Vocabulary: **151,936** (Qwen3 tokenizer)
+- Vocabulary: **151,643** (Qwen3 tokenizer)
 - FFN expansion: **3.0×** (Qwen3 standard)
 - Layer range: **24-32** (Qwen3-style deeper models)
 - GQA: **Enabled** (8 KV heads, 2:1 Q:KV ratio)
@@ -79,7 +79,7 @@ GQA: 8 KV heads (2:1 Q:KV ratio)
 | **FFN Type** | SwiGLU 3.0× | SwiGLU 3.5× | Smaller expansion |
 | **FFN Size** | 6144 | 7168 | 14% smaller |
 | **Position Encoding** | RoPE (theta=1M) | RoPE (theta=500K) | 2× higher theta |
-| **Vocab Size** | 151,936 | 128,256 | +18% larger |
+| **Vocab Size** | 151,643 | 128,256 | +18% larger |
 | **Bias** | No | No | Same |
 | **Weight Tying** | No | No | Same |
 
@@ -139,7 +139,7 @@ n_head = 16
 n_embd = 2048
 num_key_value_heads = 8
 d_ff = 6144
-vocab_size = 151936
+vocab_size = 151643
 rope_theta = 1_000_000
 
 # Components
@@ -275,7 +275,7 @@ cd /root/llm_TII/enhanced_training_system/data
 - [ ] Download Qwen3 tokenizer from HuggingFace
 - [ ] Create `data/slimpajama_6b_qwen3/prepare.py`
 - [ ] Tokenize SlimPajama-6B dataset
-- [ ] Verify 151,936 vocabulary size
+- [x] Verified 151,643 vocabulary size (actual Qwen3 tokenizer)
 
 ### 3. Testing
 

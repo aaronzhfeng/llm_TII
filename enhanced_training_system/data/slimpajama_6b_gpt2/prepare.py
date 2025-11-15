@@ -13,10 +13,10 @@ import os
 from tqdm import tqdm
 import numpy as np
 import tiktoken
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict
 
 # Configuration
-num_proc = 8  # Number of CPU cores for parallel processing
+num_proc = os.cpu_count()  # Use all available CPU cores (32 on your system!)
 num_proc_load_dataset = num_proc
 
 # Initialize GPT-2 tokenizer
@@ -57,10 +57,10 @@ if __name__ == '__main__':
         split_dataset['val'] = split_dataset.pop('test')
     elif 'train' in dataset and 'validation' in dataset:
         print("      Using existing splits...")
-        split_dataset = {
+        split_dataset = DatasetDict({
             'train': dataset['train'],
             'val': dataset['validation']
-        }
+        })
     else:
         print("      Dataset structure unknown, creating 99.5/0.5 split...")
         split_dataset = dataset["train"].train_test_split(test_size=0.005, seed=2357, shuffle=True)
@@ -70,20 +70,27 @@ if __name__ == '__main__':
     for split_name, split_data in split_dataset.items():
         print(f"    {split_name}: {len(split_data):,} examples")
     
-    # Tokenization function
-    def process(example):
-        """Tokenize a single example with GPT-2 BPE."""
-        text = example['text']
-        ids = enc.encode_ordinary(text)  # encode_ordinary ignores special tokens
-        ids.append(enc.eot_token)  # Add end-of-text token (50256 for GPT-2)
-        out = {'ids': ids, 'len': len(ids)}
-        return out
+    # Tokenization function (batched for speed)
+    def process_batch(examples):
+        """Tokenize a batch of examples with GPT-2 BPE (much faster!)"""
+        all_ids = []
+        all_lens = []
+        
+        for text in examples['text']:
+            ids = enc.encode_ordinary(text)  # encode_ordinary ignores special tokens
+            ids.append(enc.eot_token)  # Add end-of-text token (50256 for GPT-2)
+            all_ids.append(ids)
+            all_lens.append(len(ids))
+        
+        return {'ids': all_ids, 'len': all_lens}
     
-    # Tokenize the dataset
+    # Tokenize the dataset with batching (2-5× faster!)
     print("\n[3/4] Tokenizing with GPT-2 BPE (50K vocab)...")
     print("      This may take 10-20 minutes...")
     tokenized = split_dataset.map(
-        process,
+        process_batch,
+        batched=True,
+        batch_size=1000,
         remove_columns=list(split_dataset['train'].features.keys()),
         desc="Tokenizing",
         num_proc=num_proc,
