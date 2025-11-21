@@ -240,3 +240,6 @@ scaling_law_ml/
 # Misplaced dataset directories (should be in enhanced_training_system/data/)
 system_implementation/nanoGPT/data/slimpajama_627b_llama3/
 system_implementation/nanoGPT/data/slimpajama_6b_qwen3/
+
+# Flash Attention source (built from source)
+flash-attention/

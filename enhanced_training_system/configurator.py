@@ -17,14 +17,18 @@ comes up with a better simple Python solution I am all ears.
 import sys
 from ast import literal_eval
 
+# Check if we should print (only master process in DDP)
+_should_print = globals().get('master_process', True)
+
 for arg in sys.argv[1:]:
     if '=' not in arg:
         # assume it's the name of a config file
         assert not arg.startswith('--')
         config_file = arg
-        print(f"Overriding config with {config_file}:")
-        with open(config_file) as f:
-            print(f.read())
+        if _should_print:
+            print(f"Overriding config with {config_file}:")
+            with open(config_file) as f:
+                print(f.read())
         exec(open(config_file).read())
     else:
         # assume it's a --key=value argument
@@ -41,7 +45,8 @@ for arg in sys.argv[1:]:
             # ensure the types match ok
             assert type(attempt) == type(globals()[key])
             # cross fingers
-            print(f"Overriding: {key} = {attempt}")
+            if _should_print:
+                print(f"Overriding: {key} = {attempt}")
             globals()[key] = attempt
         else:
             raise ValueError(f"Unknown config key: {key}")

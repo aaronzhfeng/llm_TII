@@ -47,7 +47,8 @@ Usage:
 arch_preset = 'llama'  # Use LLaMA components: RoPE + RMSNorm + SwiGLU + Pre-norm
 
 # === Attention Backend Override ===
-attention_backend = 'flash_attn_2'  # Use FlashAttention-2 (fastest, ~2x speedup)
+attention_backend = 'flash_attn_3'  # Use FlashAttention-3 (Hopper/Blackwell optimized, fastest on H100/B200)
+                                     # Falls back to flash_attn_2 → sdpa → manual if not available
 
 # === Model Dimensions (From JSON: llama_1.36e21_32kV.json) ===
 n_layer = 18                # Number of transformer layers
@@ -85,7 +86,10 @@ intermediate_size = 6144    # Alias for compatibility
 dataset = 'slimpajama_6b_llama'    # Dataset name (data/slimpajama_6b_llama/)
                                     # Uses LLaMA-2 tokenizer (32K vocab)
                                     # Change to 'slimpajama_627b_llama' for production
-gradient_accumulation_steps = 16   # Accumulate gradients over N steps
+gradient_accumulation_steps = 64   # Gradient accumulation steps PER GPU
+                                    # Global steps = 64 * num_gpus
+                                    # For 8 GPUs: 64 per GPU × 8 = 512 global steps
+                                    # For 2 GPUs: 64 per GPU × 2 = 128 global steps
 batch_size = 8                     # Micro-batch size per GPU
                                     # Note: For 1.29B model, batch_size=6-8 works on 2× A6000
 
@@ -117,6 +121,14 @@ min_lr = 3e-5                      # Minimum LR (10% of peak)
 device = 'cuda'                    # Device type
 dtype = 'bfloat16'                 # Training precision (better than float16)
 compile = True                     # Use torch.compile() for speedup
+
+# === Advanced Optimizations (B200 specific) ===
+use_cuda_graphs = False            # CUDA Graphs (8-15% speedup, requires static shapes)
+                                    # Set to True for B200 testing (max performance)
+use_dataloader = False             # PyTorch DataLoader with workers (reduces CPU bottleneck)
+                                    # Set to True for B200 (prevents CPU bottleneck on fast GPUs)
+dataloader_num_workers = 4         # Number of data loading workers (if use_dataloader=True)
+dataloader_prefetch_factor = 2     # Number of batches to prefetch per worker
 
 # === Parallelism ===
 # For 4x A100 80GB (comfortable):

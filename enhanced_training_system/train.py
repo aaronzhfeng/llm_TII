@@ -107,7 +107,8 @@ bias = False # do we use bias inside LayerNorm and Linear layers?
 arch_preset = 'gpt2'                # Preset: 'gpt2', 'llama', 'hybrid', 'team', or 'custom'
 normalization = 'layernorm_nobias'  # 'layernorm', 'layernorm_nobias', 'rmsnorm'
 activation = 'gelu'                 # 'gelu', 'silu', 'relu', 'leaky_relu' (for standard FFN)
-attention_backend = 'sdpa'          # 'sdpa', 'manual'
+attention_backend = 'flash_attn_3'  # 'flash_attn_3', 'flash_attn_2', 'sdpa', 'manual'
+                                    # Will auto-fallback if requested backend not available
 position_encoding = 'learned_absolute'  # 'learned_absolute', 'rope', 'none'
 norm_position = 'post'              # 'pre', 'post'
 ffn_type = 'standard'               # 'standard', 'swiglu'
@@ -139,33 +140,50 @@ fsdp_activation_checkpointing = False # enable activation checkpointing with FSD
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
+# Advanced optimizations
+use_cuda_graphs = False # use CUDA Graphs to reduce kernel launch overhead (5-15% speedup, requires static shapes)
+use_dataloader = False # use PyTorch DataLoader with workers (reduces CPU bottleneck on fast GPUs)
+dataloader_num_workers = 4 # number of data loading workers (if use_dataloader=True)
+dataloader_prefetch_factor = 2 # number of batches to prefetch per worker
 # -----------------------------------------------------------------------------
+# Detect DDP rank EARLY (before configurator) to suppress duplicate logging
+ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
+if ddp:
+    ddp_rank = int(os.environ['RANK'])
+    ddp_local_rank = int(os.environ['LOCAL_RANK'])
+    ddp_world_size = int(os.environ['WORLD_SIZE'])
+    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
+else:
+    ddp_rank = 0
+    ddp_local_rank = 0
+    ddp_world_size = 1
+    master_process = True
+
+# Load configuration (only master process prints)
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
 
-# various inits, derived attributes, I/O setup
-ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
+# Initialize DDP communication (must happen after config loading)
 if ddp:
     init_process_group(backend=backend)
-    ddp_rank = int(os.environ['RANK'])
-    ddp_local_rank = int(os.environ['LOCAL_RANK'])
-    ddp_world_size = int(os.environ['WORLD_SIZE'])
     device = f'cuda:{ddp_local_rank}'
     torch.cuda.set_device(device)
-    master_process = ddp_rank == 0 # this process will do logging, checkpointing etc.
     seed_offset = ddp_rank # each process gets a different seed
-    # world_size number of processes will be training simultaneously, so we can scale
-    # down the desired gradient accumulation iterations per process proportionally
-    assert gradient_accumulation_steps % ddp_world_size == 0
-    gradient_accumulation_steps //= ddp_world_size
+    # Treat gradient_accumulation_steps as per-GPU to avoid silent scaling
+    gradient_accumulation_steps_per_gpu = gradient_accumulation_steps
 else:
-    # if not ddp, we are running on a single gpu, and one process
-    master_process = True
     seed_offset = 0
-    ddp_world_size = 1
-tokens_per_iter = gradient_accumulation_steps * ddp_world_size * batch_size * block_size
+    gradient_accumulation_steps_per_gpu = gradient_accumulation_steps
+
+# Derive global values for clarity/logging
+gradient_accumulation_steps_global = gradient_accumulation_steps_per_gpu * ddp_world_size
+tokens_per_iter = gradient_accumulation_steps_per_gpu * ddp_world_size * batch_size * block_size
+
+# Expose explicit per-GPU/global accumulation in config for logging/JSON
+config['gradient_accumulation_steps_per_gpu'] = gradient_accumulation_steps_per_gpu
+config['gradient_accumulation_steps_global'] = gradient_accumulation_steps_global
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
@@ -177,24 +195,114 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# poor man's data loader
+# Data loading implementation (modular: simple memmap or PyTorch DataLoader)
 data_dir = os.path.join('data', dataset)
-def get_batch(split):
-    # We recreate np.memmap every batch to avoid a memory leak, as per
-    # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == 'train':
-        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
-    else:
-        x, y = x.to(device), y.to(device)
-    return x, y
+
+if use_dataloader:
+    # PyTorch DataLoader implementation (better for fast GPUs like B200)
+    from torch.utils.data import Dataset, DataLoader
+    
+    class TokenDataset(Dataset):
+        """Memory-mapped token dataset for efficient loading."""
+        def __init__(self, data_path, block_size):
+            self.data = np.memmap(data_path, dtype=np.uint16, mode='r')
+            self.block_size = block_size
+            # Calculate valid starting positions (exclude last block_size tokens)
+            self.num_samples = len(self.data) - block_size
+        
+        def __len__(self):
+            return self.num_samples
+        
+        def __getitem__(self, idx):
+            # Get sequence starting at idx
+            x = torch.from_numpy(self.data[idx:idx+self.block_size].astype(np.int64))
+            y = torch.from_numpy(self.data[idx+1:idx+1+self.block_size].astype(np.int64))
+            return x, y
+    
+    # Create datasets
+    train_dataset = TokenDataset(os.path.join(data_dir, 'train.bin'), block_size)
+    val_dataset = TokenDataset(os.path.join(data_dir, 'val.bin'), block_size)
+    
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        num_workers=dataloader_num_workers,
+        pin_memory=True,
+        persistent_workers=dataloader_num_workers > 0,
+        prefetch_factor=dataloader_prefetch_factor if dataloader_num_workers > 0 else None,
+        shuffle=False,  # We'll handle randomness via random sampling
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        num_workers=max(1, dataloader_num_workers // 2),  # Fewer workers for val
+        pin_memory=True,
+        persistent_workers=False,
+        prefetch_factor=2 if dataloader_num_workers > 0 else None,
+        shuffle=False,
+    )
+    
+    # Iterator for training (global scope for get_batch function)
+    train_iter = [iter(train_loader)]  # Use list to avoid nonlocal issues
+    
+    def get_batch(split):
+        """Get batch using DataLoader (with workers and prefetching)."""
+        
+        if split == 'train':
+            try:
+                # Get next batch from iterator
+                x, y = next(train_iter[0])
+            except StopIteration:
+                # Restart iterator at end of epoch
+                train_iter[0] = iter(train_loader)
+                x, y = next(train_iter[0])
+            
+            # Move to device (already pinned by DataLoader)
+            if device_type == 'cuda':
+                x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
+            else:
+                x, y = x.to(device), y.to(device)
+        else:
+            # Validation: random sampling from val set
+            data = val_dataset.data
+            ix = torch.randint(len(data) - block_size, (batch_size,))
+            x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+            y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+            if device_type == 'cuda':
+                x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+            else:
+                x, y = x.to(device), y.to(device)
+        
+        return x, y
+    
+    if master_process:
+        print(f"✅ Using PyTorch DataLoader with {dataloader_num_workers} workers")
+        print(f"   Train dataset: {len(train_dataset):,} samples")
+        print(f"   Val dataset: {len(val_dataset):,} samples")
+
+else:
+    # Original implementation: Simple memmap (proven and reliable)
+    def get_batch(split):
+        # We recreate np.memmap every batch to avoid a memory leak, as per
+        # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
+        if split == 'train':
+            data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+        else:
+            data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+        ix = torch.randint(len(data) - block_size, (batch_size,))
+        x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
+        y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+        if device_type == 'cuda':
+            # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
+            x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+        else:
+            x, y = x.to(device), y.to(device)
+        return x, y
+    
+    if master_process:
+        print(f"✅ Using simple memmap data loading (proven and reliable)")
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -207,13 +315,15 @@ if os.path.exists(meta_path):
     with open(meta_path, 'rb') as f:
         meta = pickle.load(f)
     meta_vocab_size = meta['vocab_size']
-    print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+    if master_process:
+        print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
 # Build architecture configuration
 if MODULAR_ARCH_AVAILABLE and arch_preset != 'legacy':
     # Use modular architecture system
     if arch_preset != 'custom':
-        print(f"Loading preset architecture: '{arch_preset}'")
+        if master_process:
+            print(f"Loading preset architecture: '{arch_preset}'")
         arch_config = get_preset_config(arch_preset)
         # Override size parameters from CLI
         arch_config.n_layer = n_layer
@@ -243,7 +353,8 @@ if MODULAR_ARCH_AVAILABLE and arch_preset != 'legacy':
             else:
                 arch_config.d_ff = 4 * n_embd
     else:
-        print("Building custom architecture from config")
+        if master_process:
+            print("Building custom architecture from config")
         arch_config = ModelArchitectureConfig(
             n_layer=n_layer,
             n_head=n_head,
@@ -266,14 +377,16 @@ if MODULAR_ARCH_AVAILABLE and arch_preset != 'legacy':
     model_args = arch_config.to_dict()
 else:
     # Legacy: use original GPT model
-    print("Using legacy GPT-2 model")
+    if master_process:
+        print("Using legacy GPT-2 model")
     model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                       bias=bias, vocab_size=None, dropout=dropout)
 
 # model init
 if init_from == 'scratch':
     # init a new model from scratch
-    print("Initializing a new model from scratch")
+    if master_process:
+        print("Initializing a new model from scratch")
     
     if MODULAR_ARCH_AVAILABLE and arch_preset != 'legacy':
         # Use modular architecture
@@ -281,12 +394,14 @@ if init_from == 'scratch':
     else:
         # Legacy GPT
         if meta_vocab_size is None:
-            print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
+            if master_process:
+                print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
         model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
         gptconf = GPTConfig(**model_args)
         model = GPT(gptconf)
 elif init_from == 'resume':
-    print(f"Resuming training from {out_dir}")
+    if master_process:
+        print(f"Resuming training from {out_dir}")
     # resume training from a checkpoint
     ckpt_path = os.path.join(out_dir, 'ckpt.pt')
     checkpoint = torch.load(ckpt_path, map_location=device)
@@ -314,7 +429,8 @@ elif init_from == 'resume':
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
 elif init_from.startswith('gpt2'):
-    print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
+    if master_process:
+        print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     # initialize from OpenAI GPT-2 weights (legacy only)
     override_args = dict(dropout=dropout)
     model = GPT.from_pretrained(init_from, override_args)
@@ -330,7 +446,8 @@ model.to(device)
 # Convert model to target dtype (important for accurate MFU calculation)
 if dtype != 'float32':
     model = model.to(dtype=ptdtype)
-    print(f"Model converted to {dtype}")
+    if master_process:
+        print(f"Model converted to {dtype}")
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
@@ -341,7 +458,8 @@ checkpoint_for_resume = checkpoint if init_from == 'resume' else None
 
 # compile the model
 if compile:
-    print("compiling the model... (takes a ~minute)")
+    if master_process:
+        print("compiling the model... (takes a ~minute)")
     unoptimized_model = model
     model = torch.compile(model) # requires PyTorch 2.0
 
@@ -556,10 +674,10 @@ if master_process:
         print(f"  Vocabulary size:       {vocab_size_val}")
     
     # Training config
-    effective_batch_size = batch_size * gradient_accumulation_steps * ddp_world_size
+    effective_batch_size = batch_size * gradient_accumulation_steps_per_gpu * ddp_world_size
     print(f"\n⚙️  TRAINING CONFIGURATION:")
     print(f"  Batch size (micro):    {batch_size}")
-    print(f"  Gradient accum steps:  {gradient_accumulation_steps}")
+    print(f"  Gradient accum steps:  {gradient_accumulation_steps_per_gpu} per GPU │ {gradient_accumulation_steps_global} global")
     print(f"  Effective batch size:  {effective_batch_size}")
     print(f"  Tokens per iteration:  {tokens_per_iter:,}")
     print(f"  Max iterations:        {max_iters:,}")
@@ -585,8 +703,12 @@ if master_process:
             print(f"  Parallelism:           {parallelism}")
     
     # Theoretical FLOPs calculation
-    mfu_info = raw_model.estimate_mfu_detailed(batch_size * gradient_accumulation_steps, 1.0, 
-                                                device_type='cuda', num_gpus=ddp_world_size)
+    mfu_info = raw_model.estimate_mfu_detailed(
+        batch_size * gradient_accumulation_steps_per_gpu * ddp_world_size,
+        1.0,
+        device_type='cuda',
+        num_gpus=ddp_world_size
+    )
     print(f"\n📈 THEORETICAL PERFORMANCE:")
     print(f"  Hardware peak:         {mfu_info['hardware_peak_tflops']:.1f} TFLOPS ({mfu_info['gpu_name']} {mfu_info['precision']})")
     print(f"  FLOPs per token:       {mfu_info['flops_per_token']/1e9:.2f} GFLOPs")
@@ -607,6 +729,32 @@ if master_process:
     print("\n" + "="*80)
     print("🏁 STARTING TRAINING")
     print("="*80 + "\n")
+
+# CUDA Graphs setup (optional, for maximum performance)
+cuda_graph = None
+static_X = None
+static_Y = None
+static_loss = None
+cuda_graphs_enabled = False
+CUDA_GRAPH_WARMUP_ITERS = 10  # Warmup iterations before capturing graph
+
+if use_cuda_graphs and device_type == 'cuda':
+    if master_process:
+        print("\n" + "="*80)
+        print("🔧 CUDA Graphs Mode Enabled")
+        print("="*80)
+        print(f"   Warmup iterations: {CUDA_GRAPH_WARMUP_ITERS}")
+        print(f"   Graph will be captured after warmup for maximum performance")
+        print(f"   Note: Requires static shapes (batch_size, block_size must be constant)")
+        print("="*80 + "\n")
+    
+    # Pre-allocate static tensors for CUDA graph
+    static_X = torch.zeros((batch_size, block_size), dtype=torch.long, device=device)
+    static_Y = torch.zeros((batch_size, block_size), dtype=torch.long, device=device)
+elif use_cuda_graphs:
+    if master_process:
+        print(f"⚠️  WARNING: CUDA Graphs requested but device is '{device_type}', not 'cuda'")
+        print(f"           Falling back to standard training loop")
 
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
@@ -734,40 +882,111 @@ while True:
                             json_logger.log_checkpoint(iter_num, losses['val'], ckpt_path)
     if iter_num == 0 and eval_only:
         break
-
-    # forward backward update, with optional gradient accumulation to simulate larger batch size
-    # and using the GradScaler if data type is float16
-    for micro_step in range(gradient_accumulation_steps):
-        # Control gradient synchronization
-        if ddp and use_fsdp:
-            # FSDP: use no_sync() context manager for all but the last micro step
-            sync_context = nullcontext() if micro_step == gradient_accumulation_steps - 1 else model.no_sync()
-        elif ddp:
-            # DDP: toggle require_backward_grad_sync flag
-            model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
-            sync_context = nullcontext()
-        else:
-            # Single GPU: no synchronization needed
-            sync_context = nullcontext()
-        
-        with sync_context:
-            with ctx:
-                logits, loss = model(X, Y)
-                loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
-            # immediately async prefetch next batch while model is doing the forward pass on the GPU
-            X, Y = get_batch('train')
-            # backward pass, with gradient scaling if training in fp16
-            scaler.scale(loss).backward()
     
-    # clip the gradient
-    if grad_clip != 0.0:
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-    # step the optimizer and scaler if training in fp16
-    scaler.step(optimizer)
-    scaler.update()
-    # flush the gradients as soon as we can, no need for this memory anymore
-    optimizer.zero_grad(set_to_none=True)
+    # CUDA Graphs: Capture after warmup iterations
+    if (use_cuda_graphs and device_type == 'cuda' and 
+        not cuda_graphs_enabled and local_iter_num == CUDA_GRAPH_WARMUP_ITERS):
+        
+        if master_process:
+            print("\n" + "="*80)
+            print("📸 Capturing CUDA Graph...")
+            print("="*80)
+        
+        # Ensure model is in training mode
+        model.train()
+        
+        # Create CUDA graph and capture training iteration
+        cuda_graph = torch.cuda.CUDAGraph()
+        
+        # Copy current batch to static tensors
+        static_X.copy_(X)
+        static_Y.copy_(Y)
+        
+        # Warmup for graph capture (required for stable capture)
+        for _ in range(3):
+            with ctx:
+                logits, loss = model(static_X, static_Y)
+                loss = loss / gradient_accumulation_steps
+            scaler.scale(loss).backward()
+            optimizer.zero_grad(set_to_none=True)
+        
+        # Capture the graph
+        with torch.cuda.graph(cuda_graph):
+            for micro_step in range(gradient_accumulation_steps):
+                # Control gradient synchronization
+                if ddp and use_fsdp:
+                    sync_context = nullcontext() if micro_step == gradient_accumulation_steps - 1 else model.no_sync()
+                elif ddp:
+                    model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+                    sync_context = nullcontext()
+                else:
+                    sync_context = nullcontext()
+                
+                with sync_context:
+                    with ctx:
+                        logits, loss = model(static_X, static_Y)
+                        loss = loss / gradient_accumulation_steps
+                    scaler.scale(loss).backward()
+            
+            # Gradient clipping and optimizer step
+            if grad_clip != 0.0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+        
+        cuda_graphs_enabled = True
+        if master_process:
+            print("✅ CUDA Graph captured successfully!")
+            print(f"   Graph covers {gradient_accumulation_steps} micro-steps")
+            print(f"   All subsequent iterations will use the graph for maximum speed")
+            print("="*80 + "\n")
+    
+    # Execute training iteration (with or without CUDA graphs)
+    if cuda_graphs_enabled:
+        # CUDA Graphs: Fast path - just update inputs and replay
+        static_X.copy_(X)
+        static_Y.copy_(Y)
+        cuda_graph.replay()
+        # Get next batch for next iteration
+        X, Y = get_batch('train')
+        
+    else:
+        # Standard training loop (default, or before graph capture)
+        # forward backward update, with optional gradient accumulation to simulate larger batch size
+        # and using the GradScaler if data type is float16
+        for micro_step in range(gradient_accumulation_steps):
+            # Control gradient synchronization
+            if ddp and use_fsdp:
+                # FSDP: use no_sync() context manager for all but the last micro step
+                sync_context = nullcontext() if micro_step == gradient_accumulation_steps - 1 else model.no_sync()
+            elif ddp:
+                # DDP: toggle require_backward_grad_sync flag
+                model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+                sync_context = nullcontext()
+            else:
+                # Single GPU: no synchronization needed
+                sync_context = nullcontext()
+            
+            with sync_context:
+                with ctx:
+                    logits, loss = model(X, Y)
+                    loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
+                # immediately async prefetch next batch while model is doing the forward pass on the GPU
+                X, Y = get_batch('train')
+                # backward pass, with gradient scaling if training in fp16
+                scaler.scale(loss).backward()
+        
+        # clip the gradient
+        if grad_clip != 0.0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        # step the optimizer and scaler if training in fp16
+        scaler.step(optimizer)
+        scaler.update()
+        # flush the gradients as soon as we can, no need for this memory anymore
+        optimizer.zero_grad(set_to_none=True)
 
     # timing and logging
     t1 = time.time()
@@ -786,8 +1005,8 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             # Get detailed MFU breakdown
             mfu_breakdown = raw_model.estimate_mfu_detailed(
-                batch_size * gradient_accumulation_steps, 
-                dt, 
+                batch_size * gradient_accumulation_steps_per_gpu * ddp_world_size,
+                dt,
                 device_type=device_type,
                 num_gpus=ddp_world_size
             )
@@ -869,4 +1088,3 @@ if json_logger and master_process:
 
 if ddp:
     destroy_process_group()
-

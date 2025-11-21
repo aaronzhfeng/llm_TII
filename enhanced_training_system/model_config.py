@@ -49,8 +49,9 @@ class ModelArchitectureConfig:
     activation: Literal['gelu', 'silu', 'relu', 'leaky_relu'] = 'gelu'
     
     # ========== ATTENTION ==========
-    attention_backend: Literal['flash_attn_2', 'sdpa', 'manual'] = 'flash_attn_2'
+    attention_backend: Literal['flash_attn_3', 'flash_attn_2', 'sdpa', 'manual'] = 'flash_attn_3'
     # Options:
+    #   - 'flash_attn_3': FlashAttention-3 (Hopper/Blackwell optimized, fastest on H100/B200, requires flash-attn >= 2.5.0)
     #   - 'flash_attn_2': Explicit FlashAttention-2 (~2× faster than FA-1, requires flash-attn package)
     #   - 'sdpa': PyTorch SDPA (FlashAttention-1, standard, PyTorch >=2.0)
     #   - 'manual': Naive attention (slow, for debugging)
@@ -338,7 +339,7 @@ def get_llama_style_config() -> ModelArchitectureConfig:
         position_encoding='rope',
         norm_position='pre',
         ffn_type='swiglu',
-        attention_backend='sdpa',
+        attention_backend='flash_attn_2',  # FlashAttention-2 for best performance
         
         # Options
         bias=False,
@@ -444,7 +445,7 @@ def get_llama3_style_config() -> ModelArchitectureConfig:
         position_encoding='rope',
         norm_position='pre',
         ffn_type='swiglu',
-        attention_backend='sdpa',
+        attention_backend='flash_attn_2',  # FlashAttention-2 for best performance
         
         # LLaMA 3 specifics
         num_key_value_heads=8,  # GQA: 8 KV heads (creates 16:8 = 2:1 Q:KV ratio)

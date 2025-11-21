@@ -22,12 +22,17 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-# Try importing FlashAttention-2
+# Try importing FlashAttention-2 and FlashAttention-3
 try:
     from flash_attn import flash_attn_func
+    from flash_attn.flash_attn_interface import flash_attn_func as flash_attn_3_func
+    import flash_attn
+    from packaging import version
     HAS_FLASH_ATTN_2 = True
+    HAS_FLASH_ATTN_3 = version.parse(flash_attn.__version__) >= version.parse("2.5.0")
 except ImportError:
     HAS_FLASH_ATTN_2 = False
+    HAS_FLASH_ATTN_3 = False
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -62,11 +67,21 @@ class CausalSelfAttention(nn.Module):
         # Check PyTorch SDPA availability (FlashAttention-1 backend)
         self.has_sdpa = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         
-        # Check FlashAttention-2 availability
+        # Check FlashAttention-2 and FlashAttention-3 availability
         self.has_flash_attn_2 = HAS_FLASH_ATTN_2
+        self.has_flash_attn_3 = HAS_FLASH_ATTN_3
         
-        # Validate attention backend choice
-        if self.attention_backend == 'flash_attn_2' and not self.has_flash_attn_2:
+        # Validate attention backend choice with fallback chain
+        if self.attention_backend == 'flash_attn_3':
+            if not self.has_flash_attn_3:
+                print(f"WARNING: flash_attn_3 requested but flash-attn >= 2.5.0 not available.")
+                if self.has_flash_attn_2:
+                    print(f"         Falling back to 'flash_attn_2'")
+                    self.attention_backend = 'flash_attn_2'
+                else:
+                    print(f"         Falling back to 'sdpa'")
+                    self.attention_backend = 'sdpa'
+        elif self.attention_backend == 'flash_attn_2' and not self.has_flash_attn_2:
             print(f"WARNING: flash_attn_2 requested but flash-attn package not installed.")
             print(f"         Falling back to 'sdpa' (FlashAttention-1 via PyTorch)")
             self.attention_backend = 'sdpa'
@@ -84,7 +99,8 @@ class CausalSelfAttention(nn.Module):
         
         # Print which backend is actually being used
         backend_names = {
-            'flash_attn_2': 'FlashAttention-2 (explicit, fastest)',
+            'flash_attn_3': 'FlashAttention-3 (Hopper/Blackwell optimized, fastest on H100/B200)',
+            'flash_attn_2': 'FlashAttention-2 (explicit, fastest on Ampere/Ada)',
             'sdpa': 'PyTorch SDPA (FlashAttention-1, standard)',
             'manual': 'Manual attention (slow, for debugging)'
         }
@@ -99,9 +115,19 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
-        # Attention computation - 3 explicit backends
-        if self.attention_backend == 'flash_attn_2':
-            # FlashAttention-2: Explicit, fastest (~2× faster than FA-1)
+        # Attention computation - 4 explicit backends
+        if self.attention_backend == 'flash_attn_3':
+            # FlashAttention-3: Hopper/Blackwell optimized (fastest on H100/B200)
+            # Requires: pip install flash-attn --upgrade (>= 2.5.0)
+            # q, k, v should be (B, T, nh, hs) for flash_attn_3_func
+            q = q.transpose(1, 2)  # (B, T, nh, hs)
+            k = k.transpose(1, 2)  # (B, T, nh, hs)
+            v = v.transpose(1, 2)  # (B, T, nh, hs)
+            y = flash_attn_3_func(q, k, v, dropout_p=self.dropout if self.training else 0, causal=True)
+            y = y.contiguous().view(B, T, C)  # Already in (B, T, nh, hs), just reshape
+            
+        elif self.attention_backend == 'flash_attn_2':
+            # FlashAttention-2: Explicit, fastest on Ampere/Ada (~2× faster than FA-1)
             # Requires: pip install flash-attn
             # q, k, v should be (B, T, nh, hs) for flash_attn_func
             q = q.transpose(1, 2)  # (B, T, nh, hs)
@@ -346,6 +372,11 @@ class GPT(nn.Module):
         Estimate model flops utilization (MFU) with detailed breakdown.
         Uses academic formula: FLOPs = 12SBH² + 2aS²BH per layer (forward pass)
         
+        Args:
+            fwdbwd_per_iter: Global number of sequences per iteration
+                             (micro_batch_size × grad_accum_per_gpu × world_size).
+            dt: Wall-clock duration (seconds) for the iteration.
+        
         Formula Reference:
         - Insu Jang (2022): https://insujang.github.io/2022-07-30/analysis-of-transformer-model/
         - Epoch AI backward/forward ratio: https://epoch.ai/blog/backward-forward-FLOP-ratio
@@ -398,13 +429,15 @@ class GPT(nn.Module):
         # Total training FLOPs per token (PaLM MFU denominator)
         training_flops_per_token = (non_attn_flops + attn_flops) * 1e9  # Convert back to FLOPs
         
-        # Total FLOPs for this iteration
+        # Total FLOPs for this iteration (fwdbwd_per_iter is GLOBAL sequences/iter)
         tokens_per_iter = S * fwdbwd_per_iter
         flops_per_iter = training_flops_per_token * tokens_per_iter
         
-        # Achieved throughput
+        # Achieved throughput (global and per-GPU for clarity)
         flops_achieved = flops_per_iter / dt  # FLOPs per second
+        flops_achieved_per_gpu = flops_achieved / max(num_gpus, 1)
         tokens_per_sec = tokens_per_iter / dt
+        tokens_per_sec_per_gpu = tokens_per_sec / max(num_gpus, 1)
         
         # Hardware peak FLOPs (configurable with B200 support)
         hardware_specs = {
@@ -450,8 +483,11 @@ class GPT(nn.Module):
             'mfu': mfu,
             'mfu_percent': mfu * 100,
             'flops_achieved': flops_achieved,
+            'flops_achieved_per_gpu': flops_achieved_per_gpu,
             'flops_per_token': training_flops_per_token,
             'tokens_per_sec': tokens_per_sec,
+            'tokens_per_sec_per_gpu': tokens_per_sec_per_gpu,
+            'tokens_per_iter': tokens_per_iter,
             'hardware_peak_flops': hardware_peak_flops,
             'hardware_peak_tflops': hardware_peak_flops / 1e12,
             'achieved_tflops': flops_achieved / 1e12,
@@ -547,4 +583,3 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
-

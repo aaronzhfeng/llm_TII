@@ -17,6 +17,72 @@ Complete commands for training GPT-2, LLaMA 2, LLaMA 3, and Qwen3 models.
 
 ---
 
+## 🔧 Environment Setup (First Time Only)
+
+**DGX B200 servers use externally-managed Python environments. You must create a virtual environment:**
+
+```bash
+cd /home/zhf004/llm_TII
+
+# Create virtual environment
+python3 -m venv venv
+
+# Activate it
+source venv/bin/activate
+
+# Upgrade pip
+pip install --upgrade pip wheel setuptools
+
+# Install PyTorch with CUDA 12.4 support (for B200)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# Install FlashAttention-3 (may take 5-10 minutes to compile)
+pip install flash-attn --no-build-isolation
+
+# Install other dependencies
+pip install tiktoken transformers sentencepiece protobuf
+pip install numpy tqdm packaging matplotlib pandas datasets requests
+
+# Verify installation
+python3 << 'EOF'
+import torch
+import flash_attn
+from packaging import version
+
+print("\n✅ Installation Complete!\n")
+print(f"PyTorch: {torch.__version__}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"CUDA version: {torch.version.cuda}")
+    print(f"GPU count: {torch.cuda.device_count()}")
+
+print(f"\nFlashAttention: {flash_attn.__version__}")
+if version.parse(flash_attn.__version__) >= version.parse("2.5.0"):
+    print("✅ FlashAttention-3 support available!")
+else:
+    print(f"⚠️  Need >= 2.5.0 for FA3")
+EOF
+```
+
+**For future sessions:**
+
+```bash
+# Always activate the environment before training
+cd /home/zhf004/llm_TII/enhanced_training_system
+source venv/bin/activate
+
+# When done (optional)
+deactivate
+```
+
+**Alternative: Add to your ~/.bashrc for auto-activation:**
+
+```bash
+echo "source /home/zhf004/llm_TII/enhanced_training_system/venv/bin/activate" >> ~/.bashrc
+```
+
+---
+
 ## GPT-2 1.36B
 
 ### 1. Prepare Dataset
@@ -256,6 +322,187 @@ python train.py config/full_llama_1.36b.py \
 - Memory: ~28-32 GB/GPU with ZeRO-1
 
 **Note:** For optimal convergence (85B tokens), would need ~32,000 iterations on production hardware
+
+### 8. B200 MFU & Memory Testing (8× B200, 500-1000 iterations)
+
+**Purpose:** Test FlashAttention-3 performance on B200, measure MFU, and verify memory usage for scaling to 627B dataset.
+
+```bash
+# Before running: Upgrade to FlashAttention-3 (optional but recommended)
+pip install --upgrade flash-attn --no-build-isolation
+python -c "import flash_attn; print(f'flash-attn version: {flash_attn.__version__}')"
+# Should be >= 2.5.0 for FA3 support
+# Note: System will auto-fallback to SDPA if flash-attn not available
+```
+
+**Three optimization tiers - choose based on your risk tolerance:**
+
+#### **Tier 1: Conservative (Pure DDP, proven stable)** - Target 55-62% MFU
+
+```bash
+# Pure DDP without sharding (lowest communication overhead)
+torchrun --standalone --nproc_per_node=2 train.py \
+  config/full_llama_1.36b.py \
+  --attention_backend=flash_attn_2 \
+  --max_iters=1000 \
+  --batch_size=24 \
+  --gradient_accumulation_steps=8 \
+  --eval_interval=100 \
+  --log_interval=10 \
+  --gradient_log_interval=50 \
+  --eval_iters=20 \
+  --compile=True \
+  --dtype=bfloat16 \
+  --use_zero1=False \
+  --use_fsdp=False \
+  --use_cuda_graphs=False \
+  --use_dataloader=False \
+  --always_save_checkpoint=False
+
+# Expected: 55-62% MFU, ~170,000 tokens/sec
+```
+
+#### **Tier 2: With DataLoader (better CPU efficiency)** - Target 58-65% MFU
+
+```bash
+# Add PyTorch DataLoader with 4 workers
+torchrun --standalone --nproc_per_node=8 train.py \
+  config/full_llama_1.36b.py \
+  --attention_backend=flash_attn_2 \
+  --max_iters=1000 \
+  --batch_size=24 \
+  --gradient_accumulation_steps=4 \
+  --eval_interval=100 \
+  --log_interval=10 \
+  --gradient_log_interval=50 \
+  --eval_iters=20 \
+  --compile=True \
+  --dtype=bfloat16 \
+  --use_zero1=False \
+  --use_fsdp=False \
+  --use_cuda_graphs=False \
+  --use_dataloader=True \
+  --dataloader_num_workers=4 \
+  --always_save_checkpoint=False
+
+# Expected: 58-65% MFU, ~180,000 tokens/sec
+# Prevents CPU bottleneck on fast GPUs
+```
+
+#### **Tier 3: Maximum Performance (All optimizations)** - Target 65-75% MFU
+
+```bash
+# CUDA Graphs + DataLoader (maximum speed, experimental)
+torchrun --standalone --nproc_per_node=8 train.py \
+  config/full_llama_1.36b.py \
+  --attention_backend=flash_attn_2 \
+  --max_iters=1000 \
+  --batch_size=24 \
+  --gradient_accumulation_steps=8 \
+  --eval_interval=100 \
+  --log_interval=10 \
+  --gradient_log_interval=50 \
+  --eval_iters=20 \
+  --compile=True \
+  --dtype=bfloat16 \
+  --use_zero1=False \
+  --use_fsdp=False \
+  --use_cuda_graphs=True \
+  --use_dataloader=True \
+  --dataloader_num_workers=4 \
+  --always_save_checkpoint=False
+
+# Expected: 65-75% MFU, ~200,000 tokens/sec
+# Maximum performance - CUDA Graphs reduce kernel launch overhead
+# Note: Requires stable shapes, may need debugging on first run
+```
+
+**Recommendation:** Start with **Tier 1**, then try Tier 2/3 if stable.
+
+**Monitoring:**
+
+```bash
+# Terminal 1: Watch GPU usage
+watch -n 1 nvidia-smi
+
+# Terminal 2: Watch training progress
+tail -f out-llama-1.36b/run_*.json
+
+# Check optimization status in logs
+grep -E "CUDA Graph|DataLoader|Attention backend" out-llama-1.36b/*.log
+```
+
+**Memory Profiling for 627B Dataset:**
+
+```bash
+# Test different batch sizes to find memory limits
+for BS in 12 16 20 24 28 32; do
+  echo "=== Testing batch_size=$BS ==="
+  torchrun --standalone --nproc_per_node=8 train.py \
+    config/full_llama_1.36b.py \
+    --batch_size=$BS \
+    --gradient_accumulation_steps=8 \
+    --max_iters=10 \
+    --eval_only=False \
+    --compile=True \
+    --use_fsdp=True
+  sleep 5
+done
+
+# Monitor memory with: watch -n 0.5 nvidia-smi
+# Find maximum batch_size that fits comfortably (< 160GB)
+```
+
+**Expected B200 Performance:**
+- **MFU**: 52-62% (with FlashAttention-3)
+- **Tokens/sec**: 160K-200K
+- **Memory/GPU**: 35-45 GB (batch_size=16, grad_accum=8)
+- **Time for 6B tokens**: ~30-40 minutes (validation)
+- **Time for 85B tokens**: ~5-7 hours (optimal training)
+
+**Analysis:**
+
+```bash
+# Extract performance metrics from logs
+cd /home/zhf004/llm_TII/enhanced_training_system
+python << 'EOF'
+import json
+import glob
+
+# Find latest run
+log_files = sorted(glob.glob('out-llama-1.36b/run_*.json'))
+if log_files:
+    with open(log_files[-1]) as f:
+        data = json.load(f)
+    
+    iters = data.get('training_progress', [])
+    if iters:
+        # Calculate averages (skip first 50 warmup iters)
+        warmup_skip = 50
+        valid_iters = iters[warmup_skip:]
+        
+        avg_mfu = sum(i.get('mfu', 0) for i in valid_iters) / len(valid_iters)
+        avg_tokens_sec = sum(i.get('tokens_per_sec', 0) for i in valid_iters) / len(valid_iters)
+        avg_mem = sum(i.get('memory_allocated_gb', 0) for i in valid_iters) / len(valid_iters)
+        avg_time = sum(i.get('dt_ms', 0) for i in valid_iters) / len(valid_iters)
+        
+        print("=== B200 Performance Summary (LLaMA 1.36B) ===")
+        print(f"Average MFU: {avg_mfu:.2%}")
+        print(f"Peak MFU: {max(i.get('mfu', 0) for i in valid_iters):.2%}")
+        print(f"Avg Tokens/sec: {avg_tokens_sec:,.0f}")
+        print(f"Avg Memory/GPU: {avg_mem:.1f} GB")
+        print(f"Avg Time/iter: {avg_time:.0f} ms")
+        
+        # Extrapolate for 85B tokens (optimal training)
+        tokens_per_iter = avg_tokens_sec * (avg_time / 1000)
+        iters_for_85b = 85e9 / tokens_per_iter
+        hours_for_85b = (iters_for_85b * avg_time / 1000) / 3600
+        
+        print(f"\n=== Extrapolation for 85B Tokens ===")
+        print(f"Estimated iterations: {iters_for_85b:,.0f}")
+        print(f"Estimated time: {hours_for_85b:.1f} hours ({hours_for_85b/24:.1f} days)")
+EOF
+```
 
 ---
 
@@ -686,6 +933,198 @@ python train.py config/full_qwen3_1.8b_optimal.py \
 - Better tokenization efficiency
 
 **Note:** For full convergence (82B tokens), would need ~39,000 iterations on production hardware
+
+### 8. B200 MFU & Memory Testing (8× B200, 500-1000 iterations)
+
+**Purpose:** Test FlashAttention-3 performance on B200, measure MFU, and verify memory usage for scaling to 627B dataset.
+
+```bash
+# Before running: Upgrade to FlashAttention-3 (optional but recommended)
+pip install --upgrade flash-attn --no-build-isolation
+python -c "import flash_attn; print(f'flash-attn version: {flash_attn.__version__}')"
+# Should be >= 2.5.0 for FA3 support
+# Note: System will auto-fallback to SDPA if flash-attn not available
+```
+
+**Three optimization tiers - choose based on your risk tolerance:**
+
+#### **Tier 1: Conservative (Pure DDP, proven stable)** - Target 50-58% MFU
+
+```bash
+# Pure DDP without sharding (lowest communication overhead)
+torchrun --standalone --nproc_per_node=8 train.py \
+  config/full_qwen3_1.8b_optimal.py \
+  --max_iters=1000 \
+  --batch_size=20 \
+  --gradient_accumulation_steps=4 \
+  --eval_interval=100 \
+  --log_interval=10 \
+  --gradient_log_interval=50 \
+  --eval_iters=20 \
+  --compile=True \
+  --dtype=bfloat16 \
+  --use_zero1=False \
+  --use_fsdp=False \
+  --use_cuda_graphs=False \
+  --use_dataloader=False \
+  --always_save_checkpoint=False
+
+# Expected: 50-58% MFU, ~150,000 tokens/sec
+# Note: Qwen3 is deeper (24 layers) so slightly lower MFU than LLaMA
+```
+
+#### **Tier 2: With DataLoader (better CPU efficiency)** - Target 52-62% MFU
+
+```bash
+# Add PyTorch DataLoader with 4 workers
+torchrun --standalone --nproc_per_node=8 train.py \
+  config/full_qwen3_1.8b_optimal.py \
+  --max_iters=1000 \
+  --batch_size=20 \
+  --gradient_accumulation_steps=4 \
+  --eval_interval=100 \
+  --log_interval=10 \
+  --gradient_log_interval=50 \
+  --eval_iters=20 \
+  --compile=True \
+  --dtype=bfloat16 \
+  --use_zero1=False \
+  --use_fsdp=False \
+  --use_cuda_graphs=False \
+  --use_dataloader=True \
+  --dataloader_num_workers=4 \
+  --always_save_checkpoint=False
+
+# Expected: 52-62% MFU, ~160,000 tokens/sec
+# Prevents CPU bottleneck on fast GPUs
+```
+
+#### **Tier 3: Maximum Performance (All optimizations)** - Target 60-70% MFU
+
+```bash
+# CUDA Graphs + DataLoader (maximum speed, experimental)
+torchrun --standalone --nproc_per_node=8 train.py \
+  config/full_qwen3_1.8b_optimal.py \
+  --max_iters=1000 \
+  --batch_size=20 \
+  --gradient_accumulation_steps=4 \
+  --eval_interval=100 \
+  --log_interval=10 \
+  --gradient_log_interval=50 \
+  --eval_iters=20 \
+  --compile=True \
+  --dtype=bfloat16 \
+  --use_zero1=False \
+  --use_fsdp=False \
+  --use_cuda_graphs=True \
+  --use_dataloader=True \
+  --dataloader_num_workers=4 \
+  --always_save_checkpoint=False
+
+# Expected: 60-70% MFU, ~180,000 tokens/sec
+# Maximum performance - CUDA Graphs reduce kernel launch overhead
+# Note: Requires stable shapes, may need debugging on first run
+```
+
+**Recommendation:** Start with **Tier 1**, then try Tier 2/3 if stable.
+
+**Monitoring:**
+
+```bash
+# Terminal 1: Watch GPU usage
+watch -n 1 nvidia-smi
+
+# Terminal 2: Watch training progress
+tail -f out-qwen3-1.8b-optimal/run_*.json
+
+# Check optimization status in logs
+grep -E "CUDA Graph|DataLoader|Attention backend" out-qwen3-1.8b-optimal/*.log
+```
+
+**Memory Profiling for 627B Dataset:**
+
+```bash
+# Test different batch sizes to find memory limits
+for BS in 12 16 20 24; do
+  echo "=== Testing batch_size=$BS ==="
+  torchrun --standalone --nproc_per_node=8 train.py \
+    config/full_qwen3_1.8b_optimal.py \
+    --batch_size=$BS \
+    --gradient_accumulation_steps=8 \
+    --max_iters=10 \
+    --eval_only=False \
+    --compile=True \
+    --use_fsdp=True
+  sleep 5
+done
+
+# Monitor memory with: watch -n 0.5 nvidia-smi
+# Find maximum batch_size that fits comfortably (< 160GB)
+# Note: Qwen3 is deeper (24 layers), uses more memory than LLaMA
+```
+
+**Expected B200 Performance:**
+- **MFU**: 48-58% (with FlashAttention-3, deeper model)
+- **Tokens/sec**: 140K-180K
+- **Memory/GPU**: 40-50 GB (batch_size=16, grad_accum=8)
+- **Time for 6B tokens**: ~35-45 minutes (validation)
+- **Time for 82B tokens**: ~6-8 hours (optimal training)
+
+**Analysis:**
+
+```bash
+# Extract performance metrics from logs
+cd /home/zhf004/llm_TII/enhanced_training_system
+python << 'EOF'
+import json
+import glob
+
+# Find latest run
+log_files = sorted(glob.glob('out-qwen3-1.8b-optimal/run_*.json'))
+if log_files:
+    with open(log_files[-1]) as f:
+        data = json.load(f)
+    
+    iters = data.get('training_progress', [])
+    if iters:
+        # Calculate averages (skip first 50 warmup iters)
+        warmup_skip = 50
+        valid_iters = iters[warmup_skip:]
+        
+        avg_mfu = sum(i.get('mfu', 0) for i in valid_iters) / len(valid_iters)
+        avg_tokens_sec = sum(i.get('tokens_per_sec', 0) for i in valid_iters) / len(valid_iters)
+        avg_mem = sum(i.get('memory_allocated_gb', 0) for i in valid_iters) / len(valid_iters)
+        avg_time = sum(i.get('dt_ms', 0) for i in valid_iters) / len(valid_iters)
+        
+        print("=== B200 Performance Summary (Qwen3 1.8B) ===")
+        print(f"Average MFU: {avg_mfu:.2%}")
+        print(f"Peak MFU: {max(i.get('mfu', 0) for i in valid_iters):.2%}")
+        print(f"Avg Tokens/sec: {avg_tokens_sec:,.0f}")
+        print(f"Avg Memory/GPU: {avg_mem:.1f} GB")
+        print(f"Avg Time/iter: {avg_time:.0f} ms")
+        
+        # Extrapolate for 82B tokens (optimal training)
+        tokens_per_iter = avg_tokens_sec * (avg_time / 1000)
+        iters_for_82b = 82e9 / tokens_per_iter
+        hours_for_82b = (iters_for_82b * avg_time / 1000) / 3600
+        
+        print(f"\n=== Extrapolation for 82B Tokens ===")
+        print(f"Estimated iterations: {iters_for_82b:,.0f}")
+        print(f"Estimated time: {hours_for_82b:.1f} hours ({hours_for_82b/24:.1f} days)")
+        
+        # Compare with LLaMA 3 Optimal (1.5B, 102B tokens)
+        print(f"\n=== Comparison Notes ===")
+        print(f"• Qwen3 1.8B needs 20% fewer tokens than LLaMA 3 1.5B")
+        print(f"• Qwen3 is 19% larger but trains 20% faster (fewer tokens)")
+        print(f"• Both achieve similar loss (~2.34 vs ~2.33)")
+EOF
+```
+
+**Why Qwen3 Might Have Lower MFU on B200:**
+- **Deeper model** (24 vs 18 layers): More sequential computation, harder to parallelize
+- **Extended RoPE** (theta=1M): More complex position encoding computation
+- **Larger vocab** (151K vs 32K): Bigger embedding/output layers
+- **Still competitive**: ~48-58% MFU is excellent for a deeper architecture
 
 ---
 

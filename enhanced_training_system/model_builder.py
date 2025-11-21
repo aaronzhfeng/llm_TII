@@ -29,6 +29,18 @@ from model_components import (
     POSITION_ENCODING_REGISTRY, RoPEPositionEncoding
 )
 
+# Try importing FlashAttention-2 and FlashAttention-3
+try:
+    from flash_attn import flash_attn_func
+    from flash_attn.flash_attn_interface import flash_attn_func as flash_attn_3_func
+    import flash_attn
+    from packaging import version
+    HAS_FLASH_ATTN_2 = True
+    HAS_FLASH_ATTN_3 = version.parse(flash_attn.__version__) >= version.parse("2.5.0")
+except ImportError:
+    HAS_FLASH_ATTN_2 = False
+    HAS_FLASH_ATTN_3 = False
+
 
 class ConfigurableAttention(nn.Module):
     """
@@ -71,19 +83,40 @@ class ConfigurableAttention(nn.Module):
         self.attn_dropout = nn.Dropout(config.attention_dropout)
         self.resid_dropout = nn.Dropout(config.residual_dropout)
         
-        # Check SDPA availability (supports both 'sdpa' and 'flash_attn_2' backends)
+        # Check backend availability
         self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        self.has_flash_attn_2 = HAS_FLASH_ATTN_2
+        self.has_flash_attn_3 = HAS_FLASH_ATTN_3
         
-        # Normalize flash_attn_2 to sdpa (both use PyTorch's SDPA which dispatches to FlashAttention)
-        if config.attention_backend == 'flash_attn_2':
-            if not self.flash:
-                print("WARNING: PyTorch SDPA/FlashAttention not available (requires PyTorch 2.0+), using manual attention")
-                self.attention_backend = 'manual'
-            else:
-                # flash_attn_2 uses PyTorch's SDPA backend
+        # Validate attention backend choice with fallback chain
+        if config.attention_backend == 'flash_attn_3':
+            if self.has_flash_attn_3:
+                self.attention_backend = 'flash_attn_3'
+            elif self.has_flash_attn_2:
+                print("WARNING: flash_attn_3 requested but flash-attn >= 2.5.0 not available. Falling back to flash_attn_2")
+                self.attention_backend = 'flash_attn_2'
+            elif self.flash:
+                print("WARNING: flash_attn_3 not available. Falling back to sdpa")
                 self.attention_backend = 'sdpa'
-        elif config.attention_backend == 'sdpa' and not self.flash:
-            print("WARNING: PyTorch SDPA not available (requires PyTorch 2.0+), using manual attention")
+            else:
+                print("WARNING: No optimized attention available. Falling back to manual")
+                self.attention_backend = 'manual'
+        elif config.attention_backend == 'flash_attn_2':
+            if self.has_flash_attn_2:
+                self.attention_backend = 'flash_attn_2'
+            elif self.flash:
+                print("WARNING: flash_attn_2 not available. Falling back to sdpa")
+                self.attention_backend = 'sdpa'
+            else:
+                print("WARNING: flash_attn_2 not available. Falling back to manual")
+                self.attention_backend = 'manual'
+        elif config.attention_backend == 'sdpa':
+            if self.flash:
+                self.attention_backend = 'sdpa'
+            else:
+                print("WARNING: sdpa requested but PyTorch < 2.0. Falling back to manual.")
+                self.attention_backend = 'manual'
+        else:
             self.attention_backend = 'manual'
         
         # Register causal mask for manual attention
@@ -142,7 +175,31 @@ class ConfigurableAttention(nn.Module):
             q, k = self.rope.apply_to_qk(q, k, token_positions)
         
         # Attention computation
-        if self.attention_backend == 'sdpa' and self.flash:
+        if self.attention_backend == 'flash_attn_3':
+            # FlashAttention-3: Hopper/Blackwell optimized
+            q = q.transpose(1, 2).contiguous()  # (B, T, H, D)
+            k = k.transpose(1, 2).contiguous()  # (B, T, H, D)
+            v = v.transpose(1, 2).contiguous()  # (B, T, H, D)
+            y = flash_attn_3_func(q, k, v, dropout_p=self.dropout if self.training else 0, causal=True)
+            # y is already (B, T, H, D)
+            y = y.reshape(B, T, C).contiguous()
+            # Skip the reassemble step since y is already in the right format
+            y = self.resid_dropout(self.c_proj(y))
+            return y
+            
+        elif self.attention_backend == 'flash_attn_2':
+            # FlashAttention-2: Explicit implementation
+            q = q.transpose(1, 2).contiguous()  # (B, T, H, D)
+            k = k.transpose(1, 2).contiguous()  # (B, T, H, D)
+            v = v.transpose(1, 2).contiguous()  # (B, T, H, D)
+            y = flash_attn_func(q, k, v, dropout_p=self.dropout if self.training else 0, causal=True)
+            # y is already (B, T, H, D)
+            y = y.reshape(B, T, C).contiguous()
+            # Skip the reassemble step since y is already in the right format
+            y = self.resid_dropout(self.c_proj(y))
+            return y
+            
+        elif self.attention_backend == 'sdpa' and self.flash:
             # Use PyTorch SDPA (dispatches to FlashAttention when available)
             y = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v,
@@ -355,6 +412,10 @@ class ConfigurableGPT(nn.Module):
     def estimate_mfu_detailed(self, fwdbwd_per_iter, dt, device_type='cuda', num_gpus=1):
         """
         Detailed MFU calculation accounting for actual architecture.
+        Args:
+            fwdbwd_per_iter: Global number of sequences processed per iteration
+                             (micro_batch_size × grad_accum_per_gpu × world_size).
+            dt: Wall-clock time for the iteration (seconds).
         
         Adjusts FLOPs calculation based on:
         - FFN type (standard vs SwiGLU)
@@ -443,13 +504,15 @@ class ConfigurableGPT(nn.Module):
         # Total training FLOPs per token (PaLM MFU denominator)
         training_flops_per_token = (non_attn_flops + attn_flops) * 1e9  # Convert back to FLOPs
         
-        # Total FLOPs for this iteration
+        # Total FLOPs for this iteration (fwdbwd_per_iter is GLOBAL sequences/iter)
         tokens_per_iter = S * fwdbwd_per_iter
         flops_per_iter = training_flops_per_token * tokens_per_iter
         
-        # Achieved throughput
+        # Achieved throughput (global and per-GPU for clarity)
         flops_achieved = flops_per_iter / dt
+        flops_achieved_per_gpu = flops_achieved / max(num_gpus, 1)
         tokens_per_sec = tokens_per_iter / dt
+        tokens_per_sec_per_gpu = tokens_per_sec / max(num_gpus, 1)
         
         # ===== HARDWARE SPECS (with B200) =====
         hardware_specs = {
@@ -487,8 +550,11 @@ class ConfigurableGPT(nn.Module):
             'mfu': mfu,
             'mfu_percent': mfu * 100,
             'flops_achieved': flops_achieved,
+            'flops_achieved_per_gpu': flops_achieved_per_gpu,
             'flops_per_token': training_flops_per_token,
             'tokens_per_sec': tokens_per_sec,
+            'tokens_per_sec_per_gpu': tokens_per_sec_per_gpu,
+            'tokens_per_iter': tokens_per_iter,
             'hardware_peak_flops': hardware_peak_flops,
             'hardware_peak_tflops': hardware_peak_flops / 1e12,
             'achieved_tflops': flops_achieved / 1e12,
@@ -622,4 +688,3 @@ class ConfigurableGPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
         
         return idx
-

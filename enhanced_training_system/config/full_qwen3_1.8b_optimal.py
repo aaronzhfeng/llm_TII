@@ -74,7 +74,8 @@ arch_preset = 'custom'  # Use custom to specify Qwen3-style components
 # === Qwen3-style Architecture Components ===
 normalization = 'rmsnorm'           # RMSNorm (pre-norm)
 activation = 'silu'                 # SwiGLU uses SiLU activation
-attention_backend = 'flash_attn_2'  # FlashAttention-2 (or 'sdpa')
+attention_backend = 'flash_attn_3'  # FlashAttention-3 (Hopper/Blackwell optimized, fastest on H100/B200)
+                                     # Falls back to flash_attn_2 → sdpa if not available
 position_encoding = 'rope'          # RoPE with extended theta
 norm_position = 'pre'               # Pre-norm architecture
 ffn_type = 'swiglu'                 # SwiGLU FFN
@@ -109,8 +110,11 @@ dataset = 'slimpajama_6b_qwen3'     # Dataset with Qwen3 tokenizer
                                      # For optimal training: use slimpajama_627b_qwen3
                                      # (82B tokens ≈ 39,000 iterations)
 
-gradient_accumulation_steps = 32    # Accumulate gradients over N steps
-batch_size = 6                      # Micro-batch size per GPU
+gradient_accumulation_steps = 16    # Gradient accumulation steps PER GPU
+                                     # Global steps = 16 * num_gpus
+                                     # For 8 GPUs: 16 per GPU × 8 = 128 global steps
+                                     # For 2 GPUs: 16 per GPU × 2 = 32 global steps
+batch_size = 6                       # Micro-batch size per GPU
                                      # Effective batch = 6 × 32 × 2 = 384 samples
                                      # = 786,432 tokens per iteration
 
@@ -138,6 +142,14 @@ min_lr = 3e-5                       # Minimum LR (10% of peak)
 device = 'cuda'                     # Device type
 dtype = 'bfloat16'                  # Training precision (better than float16)
 compile = True                      # Use torch.compile() for speedup
+
+# === Advanced Optimizations (B200 specific) ===
+use_cuda_graphs = False             # CUDA Graphs (8-15% speedup, requires static shapes)
+                                     # Set to True for B200 testing (max performance)
+use_dataloader = False              # PyTorch DataLoader with workers (reduces CPU bottleneck)
+                                     # Set to True for B200 (prevents CPU bottleneck on fast GPUs)
+dataloader_num_workers = 4          # Number of data loading workers (if use_dataloader=True)
+dataloader_prefetch_factor = 2      # Number of batches to prefetch per worker
 
 # === Parallelism ===
 # For 2× A6000 (testing):

@@ -43,22 +43,26 @@ def suppress_stderr():
         sys.stderr = old_stderr
         devnull.close()
 
-# Download and prepare tokenizer
+# Load Qwen3 tokenizer
 print("Loading Qwen3 tokenizer...")
-tokenizer_path = "../../qwen3_tokenizer"
-if not os.path.exists(tokenizer_path):
-    print(f"Tokenizer not found at {tokenizer_path}")
-    print("Please download it first:")
-    print("  cd ../../ && python -c \"from transformers import AutoTokenizer; ")
-    print("    tok = AutoTokenizer.from_pretrained('Qwen/Qwen3-8B', trust_remote_code=True); ")
-    print("    tok.save_pretrained('./qwen3_tokenizer')\"")
+try:
+    # Try local tokenizer first (already downloaded)
+    local_tokenizer_path = "../../qwen3_tokenizer"
+    if os.path.exists(local_tokenizer_path):
+        tokenizer = AutoTokenizer.from_pretrained(local_tokenizer_path, trust_remote_code=True, use_fast=True)
+        print(f"✓ Qwen3 tokenizer loaded from local path (vocab_size = {tokenizer.vocab_size})")
+    else:
+        # Fallback to HuggingFace
+        tokenizer = AutoTokenizer.from_pretrained('Qwen/Qwen2.5-0.5B', trust_remote_code=True, use_fast=True)
+        print(f"✓ Qwen3 tokenizer loaded from HuggingFace (vocab_size = {tokenizer.vocab_size})")
+    if tokenizer.is_fast:
+        print("  Using FAST tokenizer (Rust-based) ⚡")
+except Exception as e:
+    print(f"❌ Error loading Qwen3 tokenizer: {e}")
+    print("\nTroubleshooting:")
+    print("1. Ensure local tokenizer exists at: ../../qwen3_tokenizer")
+    print("2. Or install transformers and download: huggingface-cli login")
     exit(1)
-
-tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True, use_fast=True)
-if tokenizer.is_fast:
-    print(f"✓ Loaded FAST tokenizer (vocab_size={tokenizer.vocab_size}) ⚡")
-else:
-    print(f"✓ Loaded tokenizer (vocab_size={tokenizer.vocab_size}) [slow version]")
 
 # Load dataset
 print("\nDownloading SlimPajama-6B dataset...")

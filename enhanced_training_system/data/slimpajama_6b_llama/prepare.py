@@ -22,23 +22,22 @@ num_proc_load_dataset = num_proc
 print("Loading LLaMA-2 tokenizer...")
 try:
     from transformers import AutoTokenizer
-    # Try fast tokenizer first (Rust-based, much faster)
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", use_fast=True)
-    if tokenizer.is_fast:
-        print(f"✓ LLaMA-2 FAST tokenizer loaded (vocab_size = {tokenizer.vocab_size}) ⚡")
+    # Try local tokenizer first (already downloaded)
+    local_tokenizer_path = "../../llama2_tokenizer"
+    if os.path.exists(local_tokenizer_path):
+        tokenizer = AutoTokenizer.from_pretrained(local_tokenizer_path, use_fast=True)
+        print(f"✓ LLaMA-2 tokenizer loaded from local path (vocab_size = {tokenizer.vocab_size})")
     else:
-        print(f"✓ LLaMA-2 tokenizer loaded (vocab_size = {tokenizer.vocab_size}) [slow version]")
+        # Fallback to HuggingFace (requires authentication)
+        tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-hf", use_fast=True)
+        print(f"✓ LLaMA-2 tokenizer loaded from HuggingFace (vocab_size = {tokenizer.vocab_size})")
+    if tokenizer.is_fast:
+        print("  Using FAST tokenizer (Rust-based) ⚡")
 except Exception as e:
     print(f"❌ Error loading LLaMA-2 tokenizer: {e}")
     print("\nTroubleshooting:")
-    print("1. Install transformers: pip install transformers")
-    print("2. Accept LLaMA-2 license on HuggingFace")
-    print("3. Login: huggingface-cli login")
-    print("\nAlternative: Download tokenizer locally before SSH:")
-    print("  from transformers import AutoTokenizer")
-    print("  tokenizer = AutoTokenizer.from_pretrained('meta-llama/Llama-2-7b-hf', use_fast=True)")
-    print("  tokenizer.save_pretrained('./llama2_tokenizer')")
-    print("  # Then use: tokenizer = AutoTokenizer.from_pretrained('./llama2_tokenizer', use_fast=True)")
+    print("1. Ensure local tokenizer exists at: ../../llama2_tokenizer")
+    print("2. Or accept LLaMA-2 license on HuggingFace and login: huggingface-cli login")
     exit(1)
 
 if __name__ == '__main__':

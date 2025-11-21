@@ -6,6 +6,7 @@ torch>=2.0.0              # PyTorch 2.0+ required for torch.compile and SDPA
 numpy>=1.20.0
 tiktoken>=0.5.0          # BPE tokenizer
 tqdm>=4.65.0             # Progress bars
+packaging>=21.0          # Version checking for flash-attn
 
 # Optional but Recommended
 transformers>=4.30.0     # For loading pretrained GPT-2 weights
