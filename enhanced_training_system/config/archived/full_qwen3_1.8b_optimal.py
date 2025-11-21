@@ -74,8 +74,8 @@ arch_preset = 'custom'  # Use custom to specify Qwen3-style components
 # === Qwen3-style Architecture Components ===
 normalization = 'rmsnorm'           # RMSNorm (pre-norm)
 activation = 'silu'                 # SwiGLU uses SiLU activation
-attention_backend = 'flash_attn_3'  # FlashAttention-3 (Hopper/Blackwell optimized, fastest on H100/B200)
-                                     # Falls back to flash_attn_2 → sdpa if not available
+attention_backend = 'flash_attn_2'  # Use FlashAttention-2 (proven and stable)
+                                     # Falls back to sdpa if not available
 position_encoding = 'rope'          # RoPE with extended theta
 norm_position = 'pre'               # Pre-norm architecture
 ffn_type = 'swiglu'                 # SwiGLU FFN
@@ -114,7 +114,7 @@ gradient_accumulation_steps = 16    # Gradient accumulation steps PER GPU
                                      # Global steps = 16 * num_gpus
                                      # For 8 GPUs: 16 per GPU × 8 = 128 global steps
                                      # For 2 GPUs: 16 per GPU × 2 = 32 global steps
-batch_size = 6                       # Micro-batch size per GPU
+batch_size = 36                       # Micro-batch size per GPU
                                      # Effective batch = 6 × 32 × 2 = 384 samples
                                      # = 786,432 tokens per iteration
 

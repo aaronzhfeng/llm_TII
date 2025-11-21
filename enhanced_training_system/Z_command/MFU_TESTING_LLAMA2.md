@@ -105,7 +105,7 @@ torchrun --standalone --nproc_per_node=8 train.py \
 ```bash
 torchrun --standalone --nproc_per_node=8 train.py \
   config/full_llama_1.36b.py \
-  --max_iters=1000 \
+  --max_iters=100 \
   --batch_size=24 \
   --gradient_accumulation_steps=8 \
   --compile=True \

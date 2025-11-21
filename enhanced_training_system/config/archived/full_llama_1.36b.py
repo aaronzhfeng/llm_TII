@@ -47,8 +47,8 @@ Usage:
 arch_preset = 'llama'  # Use LLaMA components: RoPE + RMSNorm + SwiGLU + Pre-norm
 
 # === Attention Backend Override ===
-attention_backend = 'flash_attn_3'  # Use FlashAttention-3 (Hopper/Blackwell optimized, fastest on H100/B200)
-                                     # Falls back to flash_attn_2 → sdpa → manual if not available
+attention_backend = 'flash_attn_2'  # Use FlashAttention-2 (proven and stable)
+                                     # Falls back to sdpa → manual if not available
 
 # === Model Dimensions (From JSON: llama_1.36e21_32kV.json) ===
 n_layer = 18                # Number of transformer layers
@@ -86,7 +86,7 @@ intermediate_size = 6144    # Alias for compatibility
 dataset = 'slimpajama_6b_llama'    # Dataset name (data/slimpajama_6b_llama/)
                                     # Uses LLaMA-2 tokenizer (32K vocab)
                                     # Change to 'slimpajama_627b_llama' for production
-gradient_accumulation_steps = 64   # Gradient accumulation steps PER GPU
+gradient_accumulation_steps = 16   # Gradient accumulation steps PER GPU
                                     # Global steps = 64 * num_gpus
                                     # For 8 GPUs: 64 per GPU × 8 = 512 global steps
                                     # For 2 GPUs: 64 per GPU × 2 = 128 global steps

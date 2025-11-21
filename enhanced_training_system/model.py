@@ -442,7 +442,7 @@ class GPT(nn.Module):
         # Hardware peak FLOPs (configurable with B200 support)
         hardware_specs = {
             'cuda': {
-                'B200': {'bf16': 4500e12, 'fp16': 4500e12, 'fp32': 90e12},  # B200 specs
+                'B200': {'bf16': 2250e12, 'fp16': 2250e12, 'fp32': 90e12},  # Dense Tensor Core peak (Sparse: 4500 TFLOPS with 2:4 sparsity)
                 'H200': {'bf16': 1979e12, 'fp16': 1979e12, 'fp32': 67e12},
                 'H100': {'bf16': 989e12, 'fp16': 989e12, 'fp32': 67e12},
                 'A100': {'bf16': 312e12, 'fp16': 312e12, 'fp32': 19.5e12},
