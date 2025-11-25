@@ -35,10 +35,86 @@ cd /home/zhf004/llm_TII/enhanced_training_system
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --standalone --nproc_per_node=8 train.py \
   config/full_qwen3_1.8b_b200_optimal.py \
   --max_iters=200 \
-  --batch_size=24 \
+  --batch_size=22 \
   --gradient_accumulation_steps=2 \
   --compile=True \
   --always_save_checkpoint=False
+```
+
+### 🔬 MFU Version Comparison Test (Optional)
+
+Test all three MFU calculation methods with identical parameters to compare:
+
+**Version 1: Legacy nanoGPT** (6N heuristic)  
+_Uses PaLM's parameter-count formula: FLOPs = 6N + 12LHQT where N is total parameters (ignores GQA structure)._
+
+```bash
+cd /home/zhf004/llm_TII/enhanced_training_system
+cp mfu_versions/model_builder_v1.py model_builder.py
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --standalone --nproc_per_node=8 train.py \
+  config/full_qwen3_1.8b_b200_optimal.py \
+  --max_iters=200 \
+  --batch_size=22 \
+  --gradient_accumulation_steps=2 \
+  --compile=True \
+  --always_save_checkpoint=False
+
+# Check logs for: "calculation_method": "nanogpt_legacy_v1"
+# Expected MFU: ~52% (overestimated - no GQA correction)
+```
+
+**Version 2: Combined Formula** (algebraic)  
+_Uses component summation with algebraic GQA formula: Attention = 2SH²(2 + 2/G) + 4S²H, where G = n_head/n_kv_head._
+
+```bash
+cd /home/zhf004/llm_TII/enhanced_training_system
+cp mfu_versions/model_builder_v2.py model_builder.py
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --standalone --nproc_per_node=8 train.py \
+  config/full_qwen3_1.8b_b200_optimal.py \
+  --max_iters=200 \
+  --batch_size=22 \
+  --gradient_accumulation_steps=2 \
+  --compile=True \
+  --always_save_checkpoint=False
+
+# Check logs for: "calculation_method": "combined_formula_v2"
+# Expected MFU: ~44% (correct)
+# Expected attention_to_ffn_ratio: 2.50 (inflated)
+```
+
+**Version 3: Gold Standard** (explicit) ⭐ **RECOMMENDED**  
+_Uses explicit component breakdown: Q=2SH², K=2SH²/G, V=2SH²/G, O=2SH², summing all projections separately for maximum clarity._
+
+```bash
+cd /home/zhf004/llm_TII/enhanced_training_system
+cp mfu_versions/model_builder_v3.py model_builder.py
+
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --standalone --nproc_per_node=8 train.py \
+  config/full_qwen3_1.8b_b200_optimal.py \
+  --max_iters=200 \
+  --batch_size=22 \
+  --gradient_accumulation_steps=2 \
+  --compile=True \
+  --always_save_checkpoint=False
+
+# Check logs for: "calculation_method": "component_summation_v2025"
+# Expected MFU: ~44% (correct)
+# Expected attention_to_ffn_ratio: 0.50 (correct!)
+```
+
+**Comparison Summary**:
+
+| Version | MFU % | Attn/FFN Ratio | Method ID | Status |
+|---------|-------|----------------|-----------|---------|
+| v1 | ~52% | N/A | `nanogpt_legacy_v1` | ❌ Overestimated |
+| v2 | ~44% | 2.50 | `combined_formula_v2` | ⚠️ MFU ok, ratio inflated |
+| v3 | ~44% | 0.50 | `component_summation_v2025` | ✅ All correct |
+
+**After testing, restore v3 (recommended)**:
+```bash
+cp mfu_versions/model_builder_v3.py model_builder.py
 ```
 
 **Watch for:**
