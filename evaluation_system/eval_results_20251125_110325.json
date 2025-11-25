@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-11-25T11:03:18.128609",
+  "checkpoint": "/raid/zhf004/out-qwen3-1.8b-b200-50h/ckpt_160000.pt",
+  "model_params": 1829246976,
+  "benchmarks": {
+    "arc_easy": {
+      "accuracy": 0.58,
+      "correct": 58,
+      "total": 100,
+      "mode": "logprob"
+    }
+  }
+}
