@@ -1,0 +1,16 @@
+# Post-Training Requirements
+# These are in addition to the main training system requirements
+
+# Core (should already be installed)
+torch>=2.0.0
+numpy>=1.24.0
+tqdm>=4.65.0
+
+# HuggingFace (for data loading)
+transformers>=4.35.0
+datasets>=2.14.0
+tokenizers>=0.14.0
+
+# Logging (optional)
+wandb>=0.15.0
+
