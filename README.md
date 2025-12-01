@@ -397,6 +397,32 @@ These modules have been **superseded by `training_planner/`** which integrates a
 
 ---
 
+## 👥 Team Contributions
+
+We would like to thank our advisors **Professor Hao Zhang** and **TA Yiming Zhao** for their guidance throughout this project. We also thank all team members for their contributions.
+
+**All team members contributed equally to this project.**
+
+### System Team
+
+| Member | Contribution |
+|--------|--------------|
+| **Aaron Feng** | Designed modular training architecture; implemented model_builder and model_components; built post-training system (SFT, DPO) |
+| **Zhongyan Luo** | Developed data pipeline for SlimPajama-627B; handled tokenizer integration and data preprocessing; set up logging and checkpointing system |
+| **Charlie Sun** | Set up distributed training infrastructure; configured multi-GPU environment and ZeRO-1 optimization |
+| **Hargen Zheng** | Implemented MFU analysis and tracking; developed Triton kernels; integrated FlashAttention-2; built evaluation and serving systems |
+
+### Machine Learning Team
+
+| Member | Contribution |
+|--------|--------------|
+| **Andy Huang** | Conducted scaling law analysis; determined optimal model size and training token count for compute budget |
+| **Son Nguyen** | Performed model architecture comparison (GPT-2, LLaMA, Qwen3); applied scaling laws to guide hyperparameter choices |
+| **Avi Mehta** | Tuned training hyperparameters; analyzed loss curves and training dynamics |
+| **Mihir Joshi** | Designed evaluation benchmarks; analyzed model performance metrics |
+
+---
+
 ## 📝 License
 
 MIT License (same as nanoGPT)
