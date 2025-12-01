@@ -5,12 +5,12 @@ Benchmark evaluation suite for the custom-trained Qwen3 model.
 ## 📁 Directory Structure
 
 ```
-llm_TII/
+llm-foundry/
 ├── enhanced_training_system/   # Training code
 ├── serving_system/             # Inference server
 └── evaluation_system/          # ← You are here
     ├── eval_benchmarks.py      # Main evaluation script
-    ├── sample_prompts.md       # Manual testing prompts
+    ├── docs/                   # Sample prompts & guides
     └── README.md
 ```
 

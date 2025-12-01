@@ -1,4 +1,6 @@
-# LLM Training Infrastructure & Analysis
+# LLM-Foundry
+
+### Open LLM Training, Inference, and Infrastructure
 
 <p align="center">
   <img src="https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch">
@@ -7,7 +9,7 @@
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License">
 </p>
 
-A **complete end-to-end infrastructure** for training Large Language Models from scratch. This repository provides everything needed to build, train, evaluate, and serve production-ready LLMs, with **Qwen3-1.8B** as our flagship model architecture.
+A **complete end-to-end infrastructure** for forging Large Language Models from scratch. This repository provides everything needed to plan, train, evaluate, and serve production-ready LLMs, with **Qwen3-1.8B** as our flagship model.
 
 ---
 
@@ -61,7 +63,7 @@ A **complete end-to-end infrastructure** for training Large Language Models from
 ## 📁 Repository Structure
 
 ```
-llm_TII/
+llm-foundry/
 │
 ├── 🚀 enhanced_training_system/     # [CORE] Complete LLM training framework
 │   ├── train.py                     # Main training script
@@ -79,10 +81,13 @@ llm_TII/
 │
 ├── 📊 training_planner/             # [ANALYSIS] FLOPs, Parameters & Scaling Laws
 │   ├── analyze.py                   # 🌟 Main analysis tool
-│   │   ├── Forward analysis         # Model → FLOPs/params
-│   │   └── Backward scaling         # Compute budget → Optimal (N, D)
+│   │   ├── Forward analysis         # Model → FLOPs/params/memory
+│   │   ├── Backward scaling         # Compute budget → Optimal (N, D)
+│   │   ├── MFU calculation          # Hardware-aware utilization
+│   │   ├── Grid search              # Find optimal architecture for budget
+│   │   └── MoE support              # DeepSeek V3-style sparse models
 │   ├── configs/
-│   │   ├── models/                  # LLaMA, DeepSeek V3 MoE configs
+│   │   ├── models/                  # LLaMA, Qwen3, DeepSeek V3 MoE
 │   │   └── scaling_laws/            # Chinchilla (Hoffmann), Besiroglu 2024
 │   └── docs/                        # Academic formulas & references
 │
@@ -146,7 +151,7 @@ vocab_size = 151643    # Qwen3 vocabulary
 ### 1. Environment Setup
 
 ```bash
-cd llm_TII/enhanced_training_system
+cd llm-foundry/enhanced_training_system
 pip install -r requirements.txt
 ```
 
@@ -436,4 +441,4 @@ MIT License (same as nanoGPT)
 
 ---
 
-*Complete infrastructure for building, training, evaluating, and serving production LLMs from scratch.*
+*LLM-Foundry: Complete infrastructure for forging production LLMs from scratch.*

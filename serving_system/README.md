@@ -6,7 +6,7 @@ Lightweight inference server for custom-trained Qwen3 models.
 ## 📁 Directory Structure
 
 ```
-llm_TII/
+llm-foundry/
 ├── enhanced_training_system/   # Training code & model definitions
 │   ├── model_builder.py        # ConfigurableGPT class
 │   ├── model_config.py         # ModelArchitectureConfig
