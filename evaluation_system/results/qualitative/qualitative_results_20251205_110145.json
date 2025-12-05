@@ -1,0 +1,113 @@
+{
+  "timestamp": "2025-12-05T11:00:09.817584",
+  "config": {
+    "temperatures": [
+      0.7
+    ],
+    "max_tokens": [
+      128
+    ],
+    "models": [
+      "base",
+      "sft",
+      "dpo"
+    ]
+  },
+  "checkpoints": {
+    "base": "/raid/zhf004/llm_TII/enhanced_training_system/out-qwen3-1.8b-b200-50h/ckpt_160000.pt",
+    "sft": "/raid/zhf004/llm_TII/post_training/out-qwen3-1.8b-sft/ckpt_002800.pt",
+    "dpo": "/raid/zhf004/llm_TII/post_training/out-qwen3-1.8b-dpo/ckpt_000800.pt"
+  },
+  "generations": [
+    {
+      "model": "base",
+      "prompt_id": 1,
+      "category": "coding",
+      "prompt": "Write a Python function that checks if a string is a palindrome.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "(Note: It's not needed to check the length of the string, but it does help to make sure you are dealing with an actual string.)\ndef is_palindrome(s):\n    # Note: This function returns true or false\n    return len(s) == 1 and s[0] == s[-1]\n\n# If this function returns true, then we know that the string is a palindrome.\nprint(is_palindrome('abcd'))\n#  True\n\n\nA: Here is a simple way to find the length of a string:\nlength = int(input(\"Enter length of your string: \"))\nif length > 1:\n    print",
+      "generation_time": 2.5410754680633545
+    },
+    {
+      "model": "base",
+      "prompt_id": 5,
+      "category": "science",
+      "prompt": "Why is the sky blue?",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "Blue sky? What makes it blue? Why does the sky appear blue at night and not at other times of day? And why does it sometimes look blue?\nA few days ago, I was driving to a friend's house. It was dark outside, but the sun was out. As we drove past the moon, I looked up and saw that the moon was almost completely covered by the sky. What made it blue?\nThis question has been asked many times before, so I'm going to do my best to answer this one.\nThe word \"blue\" comes from the Latin term \"blanum\", meaning \"dark\". A blue",
+      "generation_time": 1.7275934219360352
+    },
+    {
+      "model": "base",
+      "prompt_id": 9,
+      "category": "creative",
+      "prompt": "Write a short poem about the ocean.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "Your first line should be \"The ocean is so beautiful!\" and the second line should say something like, \"It's so cold! It feels like it will never end.\" Then write a poem about the ocean using whatever words you can find.\nUse words that are easy to memorize. You don't need to use words that are difficult to pronounce, but you do need to remember them if you want to keep your poem interesting.\nMake sure you have plenty of blank paper and pencils for practicing your poem.\nTake some time to practice writing your poem. Read through it over and over again until you get it right.\nYou might also want",
+      "generation_time": 1.714714765548706
+    },
+    {
+      "model": "sft",
+      "prompt_id": 1,
+      "category": "coding",
+      "prompt": "Write a Python function that checks if a string is a palindrome.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "This function should take three arguments: the input string, a reverse function to return the original string, and an exception to raise when the input string is not a palindrome.\ndef is_palindrome(string): \n    # convert input string to lowercase \n    str = string.lower() \n  \n    # check if original string is same as reversed string\n    reversed_string = string[::-1] \n  \n    # return true if original string is same as reversed string\n    return reversed_string == str \n  \n# Driver code \nstring = \"hello\"\nprint(is_palindrome(string)) # True\nprint(\"hello\" in is_palindrome(string)) # False",
+      "generation_time": 1.7590420246124268
+    },
+    {
+      "model": "sft",
+      "prompt_id": 5,
+      "category": "science",
+      "prompt": "Why is the sky blue?",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "The sky is blue because of the way sunlight interacts with the particles in the atmosphere. It can be either pure white or a mixture of all the colors of the rainbow, depending on the angle of the sun and the atmospheric particles. Sunlight is made up of many different types of particles, but the light that reaches us from the sky is mostly visible to us through a filter called the \"blue filter\". This filter absorbs most of the red and blue light, making the sky blue. The amount of blue light in the sky depends on the type of terrain, cloud cover and other factors, so the sky may appear blue even if it isn",
+      "generation_time": 1.734513521194458
+    },
+    {
+      "model": "sft",
+      "prompt_id": 9,
+      "category": "creative",
+      "prompt": "Write a short poem about the ocean.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "The poem should evoke feelings of tranquility, peace and beauty of nature. The poem should also include references to marine life, such as whales and dolphins.\nThe poem should be written in an open rhyme scheme, with each line containing five syllables. The poem should also include images that evoke feelings of calmness and relaxation, such as waves crashing onto shore and stars twinkling in the night sky. Finally, the poem should end with a call for respect for the ocean and its inhabitants. It is important to remember that we are part of this majestic natural wonder and to protect it for future generations. We should all strive to make our surroundings",
+      "generation_time": 1.740891695022583
+    },
+    {
+      "model": "dpo",
+      "prompt_id": 1,
+      "category": "coding",
+      "prompt": "Write a Python function that checks if a string is a palindrome.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "This function should take two arguments, the string to be checked and an optional second argument, indicating how many times the string should be checked for similarity:\ndef check_palindrome(s1, s2):\n    # Initialize loop to check for similarities between strings\n    for i in range(1, len(s1)):\n        # Check each letter of the first string\n        for j in range(1, len(s2)):\n            # If letter is not present in both strings, compare it\n            if letter not in s1[i]:\n                return False\n            # Else, compare the letters and if they are equal,\n            else:",
+      "generation_time": 1.7830851078033447
+    },
+    {
+      "model": "dpo",
+      "prompt_id": 5,
+      "category": "science",
+      "prompt": "Why is the sky blue?",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "It's called \"blue light\" and it's a form of light that passes through our atmosphere. The blue light is scattered in all directions, including our eyes, so we can see the sky as a whole. Blue light is also known as visible light, which can be seen by humans and other animals, such as birds. What is the purpose of blue light? The main purpose of blue light is to allow us to communicate with one another. Blue light helps us see one another's faces, recognize one another's voices, and even find their location. Additionally, blue light has been used to create navigational aids, such as GPS",
+      "generation_time": 1.7237098217010498
+    },
+    {
+      "model": "dpo",
+      "prompt_id": 9,
+      "category": "creative",
+      "prompt": "Write a short poem about the ocean.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "The poem could be a description of the beauty and power of the sea, or it could be an exploration of its many secrets and mysteries. It can also be a metaphor for life in general, reflecting on the importance of the ocean in sustaining us and our planet. Finally, the poem should have a call to action, encouraging readers to appreciate and protect this vital resource. \n\nI stand upon the shore,\nThe waves crashing against my feet.\nThe sky is a blue shade\nUnseen by me yet I know.\n\nThe ocean is a source of strength,\nA sanctuary from fear.\nIt's a place that never fades,\nForever alive with us",
+      "generation_time": 1.7079463005065918
+    }
+  ]
+}

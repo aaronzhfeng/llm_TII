@@ -1,0 +1,105 @@
+{
+  "prompts": [
+    {
+      "id": 1,
+      "category": "coding",
+      "prompt": "Write a Python function that checks if a string is a palindrome."
+    },
+    {
+      "id": 2,
+      "category": "coding",
+      "prompt": "Explain the difference between a list and a tuple in Python."
+    },
+    {
+      "id": 3,
+      "category": "math",
+      "prompt": "What is the derivative of x^3 + 2x^2 - 5x + 1?"
+    },
+    {
+      "id": 4,
+      "category": "math",
+      "prompt": "A train travels 120 miles in 2 hours. What is its average speed?"
+    },
+    {
+      "id": 5,
+      "category": "science",
+      "prompt": "Why is the sky blue?"
+    },
+    {
+      "id": 6,
+      "category": "science",
+      "prompt": "What causes earthquakes?"
+    },
+    {
+      "id": 7,
+      "category": "history",
+      "prompt": "Who was the first person to walk on the moon?"
+    },
+    {
+      "id": 8,
+      "category": "history",
+      "prompt": "What year did World War II end?"
+    },
+    {
+      "id": 9,
+      "category": "creative",
+      "prompt": "Write a short poem about the ocean."
+    },
+    {
+      "id": 10,
+      "category": "creative",
+      "prompt": "Tell me a joke about programming."
+    },
+    {
+      "id": 11,
+      "category": "reasoning",
+      "prompt": "If all roses are flowers and some flowers fade quickly, can we conclude that some roses fade quickly?"
+    },
+    {
+      "id": 12,
+      "category": "reasoning",
+      "prompt": "I have 3 apples. I give away 2 and buy 5 more. How many do I have now?"
+    },
+    {
+      "id": 13,
+      "category": "advice",
+      "prompt": "What are some tips for improving sleep quality?"
+    },
+    {
+      "id": 14,
+      "category": "advice",
+      "prompt": "How can I stay motivated while learning a new skill?"
+    },
+    {
+      "id": 15,
+      "category": "explanation",
+      "prompt": "Explain how a neural network learns in simple terms."
+    },
+    {
+      "id": 16,
+      "category": "explanation",
+      "prompt": "What is the difference between weather and climate?"
+    },
+    {
+      "id": 17,
+      "category": "conversation",
+      "prompt": "Hello! How are you today?"
+    },
+    {
+      "id": 18,
+      "category": "conversation",
+      "prompt": "What's your favorite book and why?"
+    },
+    {
+      "id": 19,
+      "category": "task",
+      "prompt": "Summarize the main points of a healthy diet."
+    },
+    {
+      "id": 20,
+      "category": "task",
+      "prompt": "List 5 ways to reduce stress."
+    }
+  ]
+}
+

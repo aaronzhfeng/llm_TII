@@ -1,0 +1,25 @@
+{
+  "timestamp": "2025-12-05T10:27:35.688115",
+  "checkpoint": "/raid/zhf004/llm_TII/post_training/out-qwen3-1.8b-dpo/ckpt_000800.pt",
+  "model_params": 1829246976,
+  "benchmarks": {
+    "openbookqa": {
+      "accuracy": 0.272,
+      "correct": 136,
+      "total": 500,
+      "mode": "logprob"
+    },
+    "arc_challenge": {
+      "accuracy": 0.2935153583617747,
+      "correct": 344,
+      "total": 1172,
+      "mode": "logprob"
+    },
+    "arc_easy": {
+      "accuracy": 0.5492424242424242,
+      "correct": 1305,
+      "total": 2376,
+      "mode": "logprob"
+    }
+  }
+}

@@ -1,0 +1,113 @@
+{
+  "timestamp": "2025-12-05T11:05:03.944233",
+  "config": {
+    "temperatures": [
+      0.7
+    ],
+    "max_tokens": [
+      128
+    ],
+    "models": [
+      "base",
+      "sft",
+      "dpo"
+    ]
+  },
+  "checkpoints": {
+    "base": "/raid/zhf004/llm_TII/enhanced_training_system/out-qwen3-1.8b-b200-50h/ckpt_160000.pt",
+    "sft": "/raid/zhf004/llm_TII/post_training/out-qwen3-1.8b-sft/ckpt_002800.pt",
+    "dpo": "/raid/zhf004/llm_TII/post_training/out-qwen3-1.8b-dpo/ckpt_000800.pt"
+  },
+  "generations": [
+    {
+      "model": "base",
+      "prompt_id": 1,
+      "category": "coding",
+      "prompt": "Write a Python function that checks if a string is a palindrome.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "If it is, return True. Otherwise, return False.\n    def checkPalindrome(s):\n        for i in range(len(s)):\n            if s[i] == s[0]:\n                return True\n        else:\n            return False\n\nI want to run this code in my program and compare the results to see if it's a palindrome.\nHow can I do this?\n\nA: You can use a dictionary and map() to create an array of values and then compare the values with a boolean value.\na = {False: 1, True: 2}\na['False'] = a['True'] = False\nfor i in",
+      "generation_time": 2.5160791873931885
+    },
+    {
+      "model": "base",
+      "prompt_id": 5,
+      "category": "science",
+      "prompt": "Why is the sky blue?",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "Because of how it's made.\nWhat does a rainbow look like?\nA rainbow is a collection of colored light waves that are created when two polarized colors of light come together to form an image. Rainbow colors can be seen in nature and in art, such as paintings, photographs, and sculptures.\nWhat is the difference between a rainbow and a star?\nA rainbow is a color produced by combining two or more different colors. A star is a bright, intense object that emits a specific type of light. Both are formed by light reflecting off water molecules, but stars are more visible and have greater brightness than rainbows.\nHow do you see",
+      "generation_time": 1.7366158962249756
+    },
+    {
+      "model": "base",
+      "prompt_id": 9,
+      "category": "creative",
+      "prompt": "Write a short poem about the ocean.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "It can be written in any style you like, but it must have at least one line in rhyming couplets.\nChoose an appropriate topic for your poem. The poem should not be too long and should not exceed 25 lines. The topic of your poem should be relevant to the theme of the program. Your poem should also include the name of the place where the poem is being written.\nWrite your poem using one of these techniques: rhyme, meter, iambic pentameter, couplet, or free verse.\nWrite a poem that describes the ocean.\nWrite a poem that describes the ocean.\nWrite a poem that",
+      "generation_time": 1.7215569019317627
+    },
+    {
+      "model": "sft",
+      "prompt_id": 1,
+      "category": "coding",
+      "prompt": "Write a Python function that checks if a string is a palindrome.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "(It will return False if it isn't) \ndef check_palindrome(string):\n    if len(string) != len(string[-1]) or string == '':\n        return False\n    else:\n        for i in range(len(string)):\n            if string[i] == string[-1]:\n                return True\n        return False\n\nprint(check_palindrome(\"Hello World\"))\n\nOutput: False\n\nIs this function correct? If not, how can I make it so that it returns True when the string is a palindrome?\n\nA: You could use a list comprehension to compare the strings and ensure they are in the same order.\nstrings = [\"Hello",
+      "generation_time": 1.7446844577789307
+    },
+    {
+      "model": "sft",
+      "prompt_id": 5,
+      "category": "science",
+      "prompt": "Why is the sky blue?",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "The sky is blue because of the way that light interacts with the Earth's atmosphere. The blue light reflects off of the Earth's surface and scatters in all directions, creating a visible sky. The longer wavelengths of light (such as red and yellow) are more easily visible and therefore form the sky's main hue. The shorter wavelengths (such as green and purple) are less visible and make up the other colors, such as black and white. The colors of the sky change depending on the season and time of day, but generally remain blue. In some cases, the sky can become green or red due to dust particles in the air",
+      "generation_time": 1.7212183475494385
+    },
+    {
+      "model": "sft",
+      "prompt_id": 9,
+      "category": "creative",
+      "prompt": "Write a short poem about the ocean.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "It could be about a summer day when you stand on the shore and take in the beauty of the waves, or it could be about a journey you take when you visit the ocean. The poem should have a sense of adventure and joy as you observe the waves and the wildlife that inhabit them. You can use words like wave, beach, ocean, sky, water, etc. to describe the sights and sounds. Additionally, you can incorporate imagery such as sun, sand, sea birds, waves crashing against rocks, etc. to create a vivid description of your experience. Finally, you can add a call to action by encouraging readers to explore",
+      "generation_time": 1.7275798320770264
+    },
+    {
+      "model": "dpo",
+      "prompt_id": 1,
+      "category": "coding",
+      "prompt": "Write a Python function that checks if a string is a palindrome.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "(This will also check for the case of a letter or special character.) \ndef check_palindrome(s): \n    if s == 'z': \n        return True\n    else: \n        return False\n    \nprint(check_palindrome(\"hello world\")) # Output: True\n\nOutput:\nTrue\n\nThe function checks for a palindrome by first checking for any characters that are not letters or special characters, followed by the case of a letter or special character. If a character is found, it is compared to the existing string to determine whether it is a palindrome or not. If a character is found, it returns True and the function ends.",
+      "generation_time": 1.7394509315490723
+    },
+    {
+      "model": "dpo",
+      "prompt_id": 5,
+      "category": "science",
+      "prompt": "Why is the sky blue?",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "Why do birds have wings? How does gravity work? What is the structure of a cell? What are the three basic elements of physics? What is the function of atoms? What is the role of space in our lives? These are just some of the many questions we can explore with simple experiments. We can also build models and explore patterns, or explore how different concepts interact. We can even use our knowledge to make predictions about the future. By working through these simple experiments, we can gain a deeper understanding of the world around us. With this knowledge, we can make informed decisions, shape our world, and live happily ever after.",
+      "generation_time": 1.7196595668792725
+    },
+    {
+      "model": "dpo",
+      "prompt_id": 9,
+      "category": "creative",
+      "prompt": "Write a short poem about the ocean.",
+      "temperature": 0.7,
+      "max_tokens": 128,
+      "response": "It can be an abstract idea, or it can be more specific like describing the colors of the sky, the sound of waves crashing against rocks, or the smell of salt in the air. The poem should capture the feeling of being at the edge of the world, surrounded by nature's beauty and mystery. The poem should also provide a metaphor to help readers relate to the subject matter.\n\nThe poem should be written in a clear, concise manner that conveys the main ideas of the poem without too much detail. The poem should have a simple structure with a beginning, middle, and end. The poem should use poetic language that is easy to",
+      "generation_time": 1.7227046489715576
+    }
+  ]
+}

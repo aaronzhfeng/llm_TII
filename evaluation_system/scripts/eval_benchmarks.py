@@ -37,7 +37,9 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 
 # Add training system to path
-EVAL_ROOT = Path(__file__).parent.resolve()
+SCRIPTS_DIR = Path(__file__).parent.resolve()
+EVAL_ROOT = SCRIPTS_DIR.parent
+RESULTS_DIR = EVAL_ROOT / "results" / "benchmark"
 TRAINING_SYSTEM = EVAL_ROOT.parent / "enhanced_training_system"
 sys.path.insert(0, str(TRAINING_SYSTEM))
 
@@ -85,7 +87,7 @@ BENCHMARKS = {
 def load_model(checkpoint_path: str, device: str = "cuda", dtype: torch.dtype = torch.bfloat16):
     """Load model from checkpoint."""
     print(f"📦 Loading checkpoint from {checkpoint_path}...")
-    ckpt = torch.load(checkpoint_path, map_location=device)
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     # Reconstruct model
     model_args = ckpt["model_args"]
@@ -529,9 +531,10 @@ def main():
     
     # Save results
     if args.output:
-        output_path = Path(args.output)
+        output_path = RESULTS_DIR / args.output
     else:
-        output_path = EVAL_ROOT / f"eval_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        output_path = RESULTS_DIR / f"eval_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
     with open(output_path, "w") as f:
         json.dump(all_results, f, indent=2)
