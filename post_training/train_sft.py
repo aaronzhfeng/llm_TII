@@ -321,7 +321,12 @@ def compute_sft_loss(
     Loss is only computed on tokens where labels != ignore_index.
     This allows masking out instruction tokens.
     """
-    logits = model(input_ids)
+    # Pass a dummy target to get full sequence logits (not just last position)
+    # The model computes logits for all positions only when targets are provided
+    output = model(input_ids, targets=input_ids)
+    
+    # Handle model returning tuple (logits, loss) or just logits
+    logits = output[0] if isinstance(output, tuple) else output
     
     # Shift for causal LM
     shift_logits = logits[..., :-1, :].contiguous()
@@ -331,7 +336,7 @@ def compute_sft_loss(
     shift_logits = shift_logits.view(-1, shift_logits.size(-1))
     shift_labels = shift_labels.view(-1)
     
-    # Compute loss with ignore_index
+    # Compute loss with ignore_index (our custom masking)
     loss = F.cross_entropy(
         shift_logits, 
         shift_labels, 
@@ -705,8 +710,12 @@ def main():
                     'train/tokens_per_sec': tokens_per_sec,
                 })
             
-            if logger and iter_num % log_save_interval == 0:
+            # Log to JSON at same frequency as terminal (log_interval)
+            if logger and iter_num % log_interval == 0:
                 logger.log_iter(iter_num, loss_accum, dt * 1000, lr)
+                # Auto-save periodically
+                if iter_num % log_save_interval == 0:
+                    logger.save()
         
         iter_num += 1
     
@@ -723,6 +732,7 @@ def main():
         
         if logger:
             logger.finalize()
+            logger.save()  # Actually save the JSON file!
     
     if ddp:
         destroy_process_group()

@@ -110,7 +110,7 @@ log_interval = 5
 save_log_to_json = True
 log_save_interval = 50
 
-wandb_log = True
+wandb_log = False
 wandb_project = 'qwen3-dpo'
 wandb_run_name = 'qwen3-1.8b-dpo-ultrafeedback'
 

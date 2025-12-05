@@ -114,8 +114,8 @@ save_log_to_json = True
 log_save_interval = 50
 gradient_log_interval = 100
 
-# WandB (optional)
-wandb_log = True
+# WandB (disabled - monitoring manually)
+wandb_log = False
 wandb_project = 'qwen3-sft'
 wandb_run_name = 'qwen3-1.8b-sft-alpaca'
 

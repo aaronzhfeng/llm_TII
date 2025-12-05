@@ -256,3 +256,9 @@ enhanced_training_system/data/slimpajama_*/*.log
 enhanced_training_system/data/slimpajama_*/tokenized/
 enhanced_training_system/data/slimpajama_*/tokenized_*/
 enhanced_training_system/data/slimpajama_*/manifests/
+cursorrules.txt
+
+# Post-training data (large files)
+post_training/data/*/*.jsonl
+post_training/data/*/*.bin
+post_training/data/*/meta.json

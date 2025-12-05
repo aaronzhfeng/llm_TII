@@ -234,7 +234,11 @@ def get_batch_logps(
     Returns:
         Log probabilities [batch_size]
     """
-    logits = model(input_ids)
+    # Pass targets to get full sequence logits (not just last position)
+    output = model(input_ids, targets=input_ids)
+    
+    # Handle model returning tuple (logits, loss) or just logits
+    logits = output[0] if isinstance(output, tuple) else output
     
     # Shift for causal LM
     shift_logits = logits[..., :-1, :].contiguous()
@@ -243,16 +247,19 @@ def get_batch_logps(
     # Compute per-token log probabilities
     log_probs = F.log_softmax(shift_logits, dim=-1)
     
+    # Mask out padding and instruction tokens
+    loss_mask = (shift_labels != -100).float()
+    
+    # Clamp labels to valid range for gather (replace -100 with 0, will be masked anyway)
+    gather_labels = shift_labels.clamp(min=0)
+    
     # Gather log probs for actual tokens
     # [batch_size, seq_len-1]
     per_token_logps = torch.gather(
         log_probs,
         dim=-1,
-        index=shift_labels.unsqueeze(-1)
+        index=gather_labels.unsqueeze(-1)
     ).squeeze(-1)
-    
-    # Mask out padding and instruction tokens
-    loss_mask = (shift_labels != -100).float()
     
     # Sum log probs over sequence
     seq_logps = (per_token_logps * loss_mask).sum(dim=-1)
@@ -375,7 +382,7 @@ def get_lr(it: int, warmup_iters: int, lr_decay_iters: int,
 def load_checkpoint(checkpoint_path: str, device: str = 'cuda'):
     """Load checkpoint for fine-tuning."""
     print(f"Loading checkpoint from: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
     model_args = checkpoint.get('model_args', checkpoint.get('config', {}))
     
@@ -585,6 +592,12 @@ def main():
     
     scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
     
+    # Training Logger
+    if LOGGER_AVAILABLE and master_process and save_log_to_json:
+        logger = TrainingLogger(out_dir, model_args)
+    else:
+        logger = None
+    
     # WandB
     if wandb_log and master_process:
         import wandb
@@ -729,6 +742,12 @@ def main():
             
             print(f"iter {iter_num:5d} | loss {loss_accum:.4f} | acc {avg_acc:.3f} | margin {avg_margin:.3f} | lr {lr:.2e} | {dt*1000:.1f}ms")
             
+            # JSON logging
+            if logger:
+                logger.log_iter(iter_num, loss_accum, dt * 1000, avg_acc)  # log accuracy instead of mfu
+                if iter_num % log_save_interval == 0:
+                    logger.save()
+            
             if wandb_log:
                 wandb.log({
                     'iter': iter_num,
@@ -746,6 +765,10 @@ def main():
         print("DPO Training Complete!")
         print("="*60)
         print(f"Checkpoints saved to: {out_dir}")
+        
+        if logger:
+            logger.finalize()
+            logger.save()
     
     if ddp:
         destroy_process_group()
