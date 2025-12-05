@@ -97,9 +97,18 @@ llm-foundry/
 │   ├── data/                        # Dataset preparation scripts
 │   └── configs/                     # Training configurations
 │
-├── 🧪 evaluation_system/            # Model evaluation
-│   ├── eval_benchmarks.py           # Benchmark runner (ARC, OpenBookQA)
-│   ├── eval_qwen3_official.py       # Official Qwen3 comparison
+├── 🧪 evaluation_system/            # Model evaluation & analysis
+│   ├── scripts/                     # Evaluation scripts
+│   │   ├── eval_benchmarks.py       # Benchmark runner (ARC, OpenBookQA)
+│   │   ├── eval_qwen3_official.py   # Official Qwen3 comparison
+│   │   └── plot_comparison.py       # Benchmark visualization
+│   ├── qualitative_eval/            # 🆕 Human-style response evaluation
+│   │   ├── prompts.json             # 20 diverse prompts across 10 categories
+│   │   └── run_inference.py         # Multi-model, multi-param inference
+│   ├── results/                     # Organized evaluation outputs
+│   │   ├── benchmark/               # Quantitative results (JSON)
+│   │   ├── plots/                   # Comparison charts (PNG/PDF)
+│   │   └── qualitative/             # Model response samples
 │   └── docs/                        # Evaluation guides
 │
 ├── 🌐 serving_system/               # Production deployment
@@ -181,17 +190,42 @@ torchrun --standalone --nproc_per_node=8 train.py \
 python train.py config/preset_quick_test.py --max_iters=100
 ```
 
-### 4. Evaluation
+### 4. Post-Training (SFT + DPO)
+
+```bash
+cd ../post_training
+
+# Prepare SFT data (Alpaca dataset)
+python data/prepare_sft.py --max_samples 10000 --block_size 512
+
+# Run SFT (multi-GPU)
+torchrun --standalone --nproc_per_node=8 train_sft.py configs/sft_qwen3_1.8b.py
+
+# Run DPO (uses SFT checkpoint)
+torchrun --standalone --nproc_per_node=8 train_dpo.py configs/dpo_qwen3_1.8b.py
+```
+
+### 5. Evaluation
 
 ```bash
 cd ../evaluation_system
-python eval_benchmarks.py \
-  --checkpoint /path/to/ckpt_160000.pt \
+
+# Quantitative benchmarks (ARC, OpenBookQA)
+python scripts/eval_benchmarks.py \
+  --checkpoint /path/to/ckpt.pt \
   --tokenizer ../enhanced_training_system/qwen3_tokenizer \
   --mode logprob
+
+# Qualitative evaluation (20 diverse prompts)
+python qualitative_eval/run_inference.py \
+  --temperatures 0.3,0.7,1.0 \
+  --max-tokens-list 64,128,256
+
+# Plot comparison charts
+python scripts/plot_comparison.py
 ```
 
-### 5. Serving
+### 7. Serving
 
 ```bash
 cd ../serving_system
@@ -350,13 +384,28 @@ python train.py config/full_custom.py \
 
 ## 🧪 Evaluation Results
 
-| Benchmark | Random | Qwen3-1.8B (ours) | Notes |
-|-----------|--------|-------------------|-------|
-| **ARC-Easy** | 25% | 45-50% | Grade-school science |
-| **ARC-Challenge** | 25% | 28-32% | Harder reasoning |
-| **OpenBookQA** | 25% | 30-35% | World knowledge |
+### Quantitative Benchmarks (Qwen3-1.8B)
 
-*Base model results. Instruction-tuning typically adds +10-20%.*
+| Benchmark | Random | Base | SFT | DPO | Best |
+|-----------|--------|------|-----|-----|------|
+| **ARC-Easy** | 25% | 45.5% | 45.8% | **46.4%** | DPO +0.9% |
+| **ARC-Challenge** | 25% | 29.2% | **30.1%** | 29.9% | SFT +0.9% |
+| **OpenBookQA** | 25% | 31.4% | 31.8% | **32.0%** | DPO +0.6% |
+
+### Qualitative Analysis (540 generations across 20 prompts)
+
+| Category | Base | SFT | DPO | Winner |
+|----------|------|-----|-----|--------|
+| **Advice** | 204 chars | 722 chars | 705 chars | SFT (+254%) |
+| **Explanation** | 486 chars | 796 chars | **819 chars** | DPO |
+| **Reasoning** | 355 chars | 519 chars | **611 chars** | DPO |
+| **History** | 229 chars | **667 chars** | 624 chars | SFT |
+
+**Key Findings:**
+- **SFT** excels at factual recall (history, science) and instruction following
+- **DPO** produces longer, more structured explanations
+- **Both** dramatically outperform Base on advice/explanation tasks
+- **Math/coding** remain challenging at 1.8B scale across all variants
 
 ---
 
@@ -371,6 +420,7 @@ python train.py config/full_custom.py \
 ### Quick References
 - `post_training/README.md` - SFT & DPO guide
 - `evaluation_system/README.md` - Benchmark evaluation
+- `evaluation_system/qualitative_eval/README.md` - Qualitative evaluation suite
 - `serving_system/README.md` - Deployment guide
 
 ---
@@ -423,7 +473,7 @@ We would like to thank our advisors **Professor Hao Zhang** and **TA Yiming Zhao
 |--------|--------------|
 | **Andy Huang** | Conducted scaling law analysis; determined optimal model size and training token count for compute budget |
 | **Son Nguyen** | Performed model architecture comparison (GPT-2, LLaMA, Qwen3); applied scaling laws to guide hyperparameter choices |
-| **Avi Mehta** | Tuned training hyperparameters; analyzed loss curves and training dynamics |
+| **Avi Mehta** | Researched architecture choices (RMSNorm, SwiGLU, RoPE); tuned training hyperparameters |
 | **Mihir Joshi** | Designed evaluation benchmarks; analyzed model performance metrics |
 
 ---
